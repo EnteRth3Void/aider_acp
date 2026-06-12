@@ -1,0 +1,2 @@
+aider-chat
+agent-client-protocol
