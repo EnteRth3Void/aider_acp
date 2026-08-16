@@ -1,6 +1,9 @@
 import logging
+import os
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import unquote, urlparse
 
 from acp.interfaces import Agent, Client
 from acp.schema import (
@@ -25,6 +28,7 @@ from acp.schema import (
     TextContentBlock,
 )
 
+
 from .session import AiderSession
 
 # Logger erstellen
@@ -39,12 +43,13 @@ logger.addHandler(console_handler)
 
 class AiderAgent(Agent):
     def __init__(self):
+        self.logger = logging.getLogger(__name__)
         self.sessions: Dict[str, AiderSession] = {}
         self.client: Optional[Client] = None
 
     def on_connect(self, conn: Client) -> None:
         self.client = conn
-        logger.info("Client connected")
+        self.logger.info("Client connected")
 
     async def initialize(
         self,
@@ -53,14 +58,13 @@ class AiderAgent(Agent):
         client_info: Optional[Implementation] = None,
         **kwargs: Any,
     ) -> InitializeResponse:
-        logger.info("Initializing with protocol version %s", protocol_version)
+        self.logger.info("Initializing with protocol version %s", protocol_version)
         return InitializeResponse(
             protocol_version=protocol_version,
             agent_info=Implementation(
                 name="aider-acp", version="0.1.0", title="Aider ACP Server"
             ),
         )
-
     async def new_session(
         self,
         cwd: str,
@@ -68,19 +72,30 @@ class AiderAgent(Agent):
         mcp_servers: Optional[List[Any]] = None,
         **kwargs: Any,
     ) -> NewSessionResponse:
+        self.logger.info(
+            "[paths] session/new cwd=%r additional_directories=%r",
+            cwd,
+            additional_directories,
+        )
         session_id = str(uuid.uuid4())
-        logger.info("Creating new session with ID %s", session_id)
         import asyncio
-
         loop = asyncio.get_running_loop()
 
         session = AiderSession(
-            session_id=session_id, connection=self.client, loop=loop, cwd=cwd
+            session_id=session_id,
+            connection=self.client,
+            loop=loop,
+            cwd=cwd,
+            additional_directories=additional_directories,
+            mcp_servers=mcp_servers
         )
         self.sessions[session_id] = session
-
-        # Optionally pre-initialize coder
-        # await session.initialize_coder()
+        self.logger.info(
+            "[paths] session/new created session_id=%s session.cwd=%s io.root=%s",
+            session_id,
+            session.cwd,
+            session.io.root,
+        )
 
         return NewSessionResponse(session_id=session_id)
 
@@ -97,23 +112,45 @@ class AiderAgent(Agent):
         message_id: Optional[str] = None,
         **kwargs: Any,
     ) -> PromptResponse:
-        logger.info("Prompt received for session ID %s", session_id)
-        session = self.sessions.get(session_id)
-        if not session:
+        self.logger.info("Prompt received for session ID %s", session_id)
+        try:
+            session = self.sessions[session_id]
+        except KeyError:
+            self.logger.error("Session %s not found", session_id)
             raise ValueError(f"Session {session_id} not found")
 
-        # Extract text from prompt blocks
+        coder_root = session.coder.root if session.coder else None
+        self.logger.info(
+            "[paths] session/prompt session_id=%s session.cwd=%s io.root=%s coder.root=%s getcwd=%s",
+            session_id,
+            session.cwd,
+            session.io.root,
+            coder_root,
+            os.getcwd(),
+        )
+
         text_parts = []
+        resource_names = []
         for block in prompt:
             if isinstance(block, TextContentBlock):
                 text_parts.append(block.text)
+            elif isinstance(block, ResourceContentBlock):
+                if block.name:
+                    resource_names.append(block.name)
+            elif isinstance(block, EmbeddedResourceContentBlock):
+                name = getattr(block.resource, "name", None) or Path(
+                    unquote(urlparse(block.resource.uri).path)
+                ).name
+                if name:
+                    resource_names.append(name)
 
         prompt_text = "\n".join(text_parts)
 
-        # Run Aider in background thread
         import asyncio
 
-        asyncio.create_task(session.run_prompt(prompt_text))
+        asyncio.create_task(
+            session.run_prompt(prompt_text, resource_names=resource_names)
+        )
 
         return PromptResponse(
             message_id=message_id or str(uuid.uuid4()), stop_reason="end_turn"
@@ -126,6 +163,7 @@ class AiderAgent(Agent):
         cwd: Optional[str] = None,
         **kwargs: Any,
     ) -> ListSessionsResponse:
+        self.logger.info("Listing sessions")
         sessions_info = [
             SessionInfo(session_id=s.session_id, cwd=s.cwd, title="Aider Session")
             for s in self.sessions.values()
@@ -135,6 +173,7 @@ class AiderAgent(Agent):
     async def close_session(
         self, session_id: str, **kwargs: Any
     ) -> CloseSessionResponse:
+        self.logger.info("Closing session ID %s", session_id)
         session = self.sessions.pop(session_id, None)
         if session:
             session.close()

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import sys
+import logging
 from acp.stdio import stdio_streams
 from acp.agent.connection import AgentSideConnection
 from acp_server.server import AiderAgent
@@ -8,25 +9,39 @@ from acp_server.server import AiderAgent
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    filename='aider_acp.log',
-    filemode='a'
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler("aider_acp.log", mode="a"),
+        logging.StreamHandler()
+    ],
+    force=True
 )
-logger = logging.getLogger("aider_acp")
+logger = logging.getLogger(__name__)
 
 async def main():
-    logger.info("Starting Aider ACP Server")
+    import os
+
+    logger.info("Starting Aider ACP Server with enhanced logging")
+    logger.info("[paths] server process cwd=%s", os.getcwd())
     
     # Get stdio streams for ACP communication
+    logger.debug("Getting stdio streams for ACP communication")
     reader, writer = await stdio_streams()
     
     # Initialize the Aider agent
+    logger.debug("Initializing the Aider agent")
     agent = AiderAgent()
     
     # Create the ACP connection
     # AgentSideConnection(agent_implementation, reader, writer)
     # The agent implementation can be a factory or the instance itself
-    async with AgentSideConnection(agent, writer, reader, listening=False) as conn:
+    async with AgentSideConnection(
+        agent, 
+        writer, 
+        reader, 
+        listening=False, 
+        use_unstable_protocol=True
+    ) as conn:
         logger.info("ACP Connection established")
         # Start listening for messages
         await conn.listen()
