@@ -6,7 +6,7 @@ Edits do not go straight to disk. They are sent with `fs/write_text_file` into Z
 
 ## Setup
 
-Python 3.12 and an API key for the LLM provider (default model: `gpt-4o` → `OPENAI_API_KEY`).
+Python 3.12 and API keys for the LLM providers you want to use.
 
 ```bash
 python -m venv .venv
@@ -23,12 +23,16 @@ In Zed: Agent Settings → External Agents → Add Custom Agent, or in `settings
       "command": "/absolute/path/to/aider_acp/.venv/bin/python",
       "args": ["/absolute/path/to/aider_acp/main.py"],
       "env": {
-        "OPENAI_API_KEY": "sk-..."
+        "OPENAI_API_KEY": "sk-...",
+        "ANTHROPIC_API_KEY": "sk-ant-...",
+        "AIDER_ACP_MODELS": "gpt-4o,anthropic/claude-sonnet-4-20250514"
       }
     }
   }
 }
 ```
+
+`AIDER_ACP_MODELS` is a comma-separated list of LiteLLM/Aider model IDs. Zed's model picker shows only entries from that list whose API key environment variable is set (for example `gpt-4o` needs `OPENAI_API_KEY`). There is no default model — without `AIDER_ACP_MODELS` the agent cannot start a session.
 
 Open the agent thread in the **project you want to edit**, not in this adapter repo. Restart the agent in Zed after changing adapter code.
 
@@ -47,7 +51,7 @@ To use a different settings file: `AIDER_ACP_SETTINGS=/path/to/file.toml`.
 ## Tests
 
 ```bash
-.venv/bin/python -m unittest test_overlay.py -v
+.venv/bin/python -m unittest test_overlay.py test_models.py -v
 ```
 
 ## Internal notes

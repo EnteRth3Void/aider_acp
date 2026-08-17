@@ -2,7 +2,7 @@ import logging
 import os
 
 from aider.coders import Coder
-from aider.models import Model
+from aider.models import Model, sanity_check_model
 from aider.utils import safe_abs_path
 
 from .file_mentions import patch_coder_file_mentions
@@ -12,40 +12,41 @@ from .workspace_files import add_all_workspace_files
 
 logger = logging.getLogger(__name__)
 
+CODER_CREATE_KWARGS = {
+    "auto_commits": False,
+    "dirty_commits": False,
+    "use_git": True,
+    "map_tokens": 0,
+    "suggest_shell_commands": False,
+    "auto_lint": False,
+    "auto_test": False,
+}
 
-def create_coder(io: ACPIO, model_name: str = "gpt-4o", cwd: str | None = None):
-    patch_run_cmd(io)
-    # Note: Aider will try to load the model.
-    # Ensure the environment variables for the provider are set.
+
+def check_model_keys(io: ACPIO, model_name: str) -> bool:
+    """Cheap per-turn guard: block the prompt if the model's API key is missing."""
     model = Model(model_name)
+    model.validate_environment()
+    if model.missing_keys:
+        keys = ", ".join(model.missing_keys)
+        io.tool_error(
+            f"Cannot use model {model_name}: missing environment variable(s): {keys}"
+        )
+        return False
+    return True
 
-    logger.info(
-        "[paths] create_coder start cwd=%r io.root=%r getcwd=%s",
-        cwd,
-        io.root,
-        os.getcwd(),
-    )
 
-    # We use Coder.create to get the appropriate coder class based on the model/edit format
-    coder = Coder.create(
-        main_model=model,
-        io=io,
-        auto_commits=False,
-        dirty_commits=False,
-        use_git=True,
-        map_tokens=0,
-        suggest_shell_commands=False,
-        auto_lint=False,
-        auto_test=False,
-    )
+def _finalize_coder(
+    coder: Coder, io: ACPIO, cwd: str | None, from_coder: Coder | None
+) -> Coder:
     patch_coder_file_mentions(coder)
 
-    # ACP session cwd is the base for relative paths (not derived from git).
     root = safe_abs_path(cwd or io.root or os.getcwd())
     coder.root = root
     coder.abs_root_path_cache.clear()
 
-    add_all_workspace_files(coder, root)
+    if from_coder is None:
+        add_all_workspace_files(coder, root)
 
     logger.info(
         "[paths] create_coder done coder.root=%s io.root=%s getcwd=%s coder.repo=%s inchat_files=%s",
@@ -55,5 +56,33 @@ def create_coder(io: ACPIO, model_name: str = "gpt-4o", cwd: str | None = None):
         coder.repo,
         coder.get_inchat_relative_files(),
     )
-
     return coder
+
+
+def create_coder(
+    io: ACPIO,
+    model_name: str,
+    cwd: str | None = None,
+    from_coder: Coder | None = None,
+) -> Coder:
+    patch_run_cmd(io)
+    model = Model(model_name)
+    # Emit "unknown context window", "did you mean", etc. once per coder build
+    # (initial init or model switch), not on every prompt.
+    sanity_check_model(io, model)
+
+    logger.info(
+        "[paths] create_coder start cwd=%r io.root=%r getcwd=%s from_coder=%s",
+        cwd,
+        io.root,
+        os.getcwd(),
+        from_coder is not None,
+    )
+
+    coder = Coder.create(
+        main_model=model,
+        io=io,
+        from_coder=from_coder,
+        **CODER_CREATE_KWARGS,
+    )
+    return _finalize_coder(coder, io, cwd, from_coder)

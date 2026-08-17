@@ -25,10 +25,16 @@ from acp.schema import (
     PromptResponse,
     ResourceContentBlock,
     SessionInfo,
+    SetSessionModelResponse,
     TextContentBlock,
 )
 
-
+from .model_catalog import (
+    build_session_model_state,
+    catalog_error_message,
+    filter_available_models,
+    parse_catalog_env,
+)
 from .session import AiderSession
 
 # Logger erstellen
@@ -89,6 +95,13 @@ class AiderAgent(Agent):
         import asyncio
         loop = asyncio.get_running_loop()
 
+        configured_models = parse_catalog_env()
+        available_models = filter_available_models(configured_models)
+        if not available_models:
+            raise ValueError(catalog_error_message(configured_models))
+
+        current_model_id = available_models[0]
+
         session = AiderSession(
             session_id=session_id,
             connection=self.client,
@@ -97,16 +110,22 @@ class AiderAgent(Agent):
             additional_directories=additional_directories,
             mcp_servers=mcp_servers,
             client_capabilities=self.client_capabilities,
+            available_model_ids=available_models,
+            current_model_id=current_model_id,
         )
         self.sessions[session_id] = session
         self.logger.info(
-            "[paths] session/new created session_id=%s session.cwd=%s io.root=%s",
+            "[paths] session/new created session_id=%s session.cwd=%s io.root=%s models=%s",
             session_id,
             session.cwd,
             session.io.root,
+            available_models,
         )
 
-        return NewSessionResponse(session_id=session_id)
+        return NewSessionResponse(
+            session_id=session_id,
+            models=build_session_model_state(available_models, current_model_id),
+        )
 
     async def prompt(
         self,
@@ -173,6 +192,20 @@ class AiderAgent(Agent):
             self.logger.warning("Cancel: session %s not found", session_id)
             return
         session.cancel()
+
+    async def set_session_model(
+        self, model_id: str, session_id: str, **kwargs: Any
+    ) -> SetSessionModelResponse:
+        session = self.sessions.get(session_id)
+        if session is None:
+            raise ValueError(f"Session {session_id} not found")
+        if session.prompt_running:
+            raise ValueError("Cannot change model while a prompt is running")
+        if model_id not in session.available_model_ids:
+            raise ValueError(f"Unknown model: {model_id}")
+
+        await session.set_model(model_id)
+        return SetSessionModelResponse()
 
     async def list_sessions(
         self,

@@ -18,7 +18,7 @@ Agent-Methoden ohne Handler. Zed kann sie nicht nutzen.
 | `session/load` | Thread-History und „Import Threads“. Nur bei `loadSession: true`. |
 | `authenticate` | Login im Agent Panel. Keys gehen aktuell nur über Env. |
 | `session/set_mode` | Mode-Picker (Ask / Code / Architect o.ä.). |
-| `session/set_model` | Modellwahl. Hart auf `gpt-4o`. |
+| ~~`session/set_model`~~ | ~~Modellwahl. Hart auf `gpt-4o`.~~ **Erledigt:** Liste aus `AIDER_ACP_MODELS` in `agent_servers.env`, gefiltert nach gesetzten API-Keys; Wechsel per `set_session_model`. |
 | `session/set_config_option` | Session-Optionen in der Zed-UI. |
 
 ### Optional / Unstable
@@ -91,7 +91,7 @@ Defaults damit:
 Antwort enthält nur `sessionId`. Es fehlen:
 
 - `modes` — kein Mode-Picker
-- `models` — keine Modellwahl
+- ~~`models` — keine Modellwahl~~ **Erledigt:** `models` mit `availableModels` + `currentModelId` aus `AIDER_ACP_MODELS` (gefiltert nach API-Keys).
 - `configOptions`
 
 Slash-Commands werden auch später nicht per `available_commands_update` nachgereicht.
@@ -116,7 +116,7 @@ Nur Aider-`confirm_ask` geht über `session/request_permission`. File-Writes und
 
 ### Coder / Workspace
 
-- Modell fest `gpt-4o`, unabhängig von Zed.
+- ~~Modell fest `gpt-4o`, unabhängig von Zed.~~ **Erledigt:** Modell aus `AIDER_ACP_MODELS` + Zed-Picker; kein implizites Default.
 - `map_tokens=0` — kein Repo-Map.
 - Alle Workspace-Dateien landen im Chat-Context (kann bei großen Repos teuer/langsam sein).
 - `auto_commits=False` — Aider committet nicht; ACP-seitig gibt es dafür auch keine Alternative.

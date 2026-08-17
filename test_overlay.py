@@ -4,6 +4,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from aider.utils import safe_abs_path
@@ -373,17 +374,14 @@ class PromptLifecycleTests(unittest.IsolatedAsyncioTestCase):
             connection=FakeConn(),
             loop=loop,
             cwd=tempfile.gettempdir(),
+            available_model_ids=["gpt-4o"],
+            current_model_id="gpt-4o",
         )
         session.io = fake_io
         session.coder = FakeCoder(session)
 
-        class ImmediateLoop:
-            async def run_in_executor(self, executor, func):
-                return func()
-
-        session.loop = ImmediateLoop()
-
-        stop_reason = await session.run_prompt("hello")
+        with patch("acp_server.session.check_model_keys", return_value=True):
+            stop_reason = await session.run_prompt("hello")
 
         self.assertEqual(stop_reason, "cancelled")
         self.assertTrue(fake_io.clear_called)

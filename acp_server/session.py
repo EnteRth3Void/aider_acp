@@ -10,7 +10,7 @@ from aider.coders import Coder
 from acp.schema import ClientCapabilities
 from aider_bridge.file_mentions import apply_at_mentions
 from aider_bridge.io_bridge import ACPIO
-from aider_bridge.factory import create_coder
+from aider_bridge.factory import create_coder, check_model_keys
 
 
 def _fs_flag(capabilities: Optional[ClientCapabilities], name: str) -> bool:
@@ -32,6 +32,8 @@ class AiderSession:
         additional_directories: Optional[list[str]] = None,
         mcp_servers: Optional[list[Any]] = None,
         client_capabilities: Optional[ClientCapabilities] = None,
+        available_model_ids: Optional[list[str]] = None,
+        current_model_id: Optional[str] = None,
     ):
         self.logger = logging.getLogger(__name__)
         self.session_id = session_id
@@ -57,6 +59,8 @@ class AiderSession:
             cancelled_event=self.cancelled,
         )
         self.coder: Optional[Coder] = None
+        self.available_model_ids = list(available_model_ids or [])
+        self.current_model_id = current_model_id
         self.executor = ThreadPoolExecutor(max_workers=1)
         self._prompt_running = False
         self.logger.info(
@@ -67,8 +71,10 @@ class AiderSession:
             self.additional_directories,
         )
 
-    async def initialize_coder(self, model_name: str = "gpt-4o"):
-        # Coder creation might do some IO, better to run in executor or at least keep it async-friendly
+    async def initialize_coder(self, model_name: Optional[str] = None):
+        model_name = model_name or self.current_model_id
+        if not model_name:
+            raise RuntimeError("No model selected for this session")
         self.logger.info("Initializing coder with model: %s", model_name)
         
         def _init():
@@ -100,6 +106,31 @@ class AiderSession:
 
         await self.loop.run_in_executor(self.executor, _init)
 
+    async def set_model(self, model_id: str) -> None:
+        if self._prompt_running:
+            raise RuntimeError("Cannot change model while a prompt is running")
+        if model_id not in self.available_model_ids:
+            raise ValueError(f"Unknown model: {model_id}")
+
+        self.current_model_id = model_id
+        if not self.coder:
+            return
+
+        def _switch():
+            import sys
+            import contextlib
+
+            os.chdir(self.cwd)
+            with contextlib.redirect_stdout(sys.stderr):
+                self.coder = create_coder(
+                    self.io,
+                    model_name=model_id,
+                    cwd=self.cwd,
+                    from_coder=self.coder,
+                )
+
+        await self.loop.run_in_executor(self.executor, _switch)
+
 
     @property
     def prompt_running(self) -> bool:
@@ -125,6 +156,9 @@ class AiderSession:
         try:
             self.logger.info("Running prompt with text: %s", prompt_text)
             self.logger.debug("Resource names: %s", resource_names)
+
+            if not check_model_keys(self.io, self.current_model_id):
+                return "end_turn"
 
             if not self.coder:
                 self.logger.debug("Coder not initialized, initializing now")

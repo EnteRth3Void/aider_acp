@@ -294,7 +294,14 @@ class ACPIO(InputOutput):
 
     def tool_error(self, message: str = "", strip: bool = True):
         self.logger.error("Tool error: %s", message)
-        self.tool_output(f"Error: {message}")
+        text = f"Error: {message}".strip()
+        if not text:
+            return
+        chunk = AgentMessageChunk(
+            content=TextContentBlock(text=text, type="text"),
+            session_update="agent_message_chunk",
+        )
+        self._send_update(chunk, wait=True)
 
     def tool_warning(self, message: str = "", strip: bool = True):
         self.logger.warning("Tool warning: %s", message)
