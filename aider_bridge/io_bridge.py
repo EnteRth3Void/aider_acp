@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 import uuid
+from concurrent.futures import Future
 from typing import Any, Optional
 
 from acp.agent.connection import AgentSideConnection
@@ -67,7 +68,10 @@ class ACPIO(InputOutput):
         self.read_via_client = read_via_client
         self._overlay: dict[str, str] = {}
         self._overlay_originals: dict[str, Optional[str]] = {}
+        self.cancelled_event = kwargs.pop("cancelled_event", None)
+        self._permission_future: Future[Any] | None = None
         super().__init__(pretty=False, **kwargs)
+        self._async_cancelled = asyncio.Event()
         self.logger.info(
             "[paths] ACPIO init session_id=%s root=%s write_via_client=%s read_via_client=%s",
             session_id,
@@ -85,10 +89,19 @@ class ACPIO(InputOutput):
 
     def _send_update(self, update: Any, wait: bool = False):
         self.logger.debug("Sending update: %s", update)
-        future = asyncio.run_coroutine_threadsafe(
-            self.connection.session_update(session_id=self.session_id, update=update),
-            self.loop,
+        coro = self.connection.session_update(
+            session_id=self.session_id, update=update
         )
+        try:
+            if asyncio.get_running_loop() is self.loop:
+                task = self.loop.create_task(coro)
+                task.add_done_callback(
+                    lambda f: self.logger.debug("Update sent successfully")
+                )
+                return
+        except RuntimeError:
+            pass
+        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
         if wait:
             future.result()
         else:
@@ -105,6 +118,17 @@ class ACPIO(InputOutput):
     def clear_overlay(self) -> None:
         self._overlay.clear()
         self._overlay_originals.clear()
+
+    def signal_async_cancel(self) -> None:
+        self._async_cancelled.set()
+
+    def reset_async_cancel(self) -> None:
+        self._async_cancelled.clear()
+
+    def _is_cancelled(self) -> bool:
+        return bool(
+            self.cancelled_event is not None and self.cancelled_event.is_set()
+        )
 
     def _read_baseline(self, path: str) -> Optional[str]:
         if self.read_via_client:
@@ -276,11 +300,31 @@ class ACPIO(InputOutput):
         self.logger.warning("Tool warning: %s", message)
         self.tool_output(f"Warning: {message}")
 
+    async def _permission_or_cancel(self, options, tool_call):
+        perm = asyncio.create_task(
+            self.connection.request_permission(
+                options=options,
+                session_id=self.session_id,
+                tool_call=tool_call,
+            )
+        )
+        cancel_wait = asyncio.create_task(self._async_cancelled.wait())
+        done, pending = await asyncio.wait(
+            {perm, cancel_wait}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
+        if self._async_cancelled.is_set() or perm not in done:
+            return None
+        return perm.result()
+
     def confirm_ask(self, question: str, **kwargs: Any) -> bool:
         self.logger.info("Confirmation requested: %s", question)
         if self.yes is True:
             return True
         if self.yes is False:
+            return False
+        if self._is_cancelled():
             return False
 
         subject = kwargs.get("subject")
@@ -304,17 +348,16 @@ class ACPIO(InputOutput):
         tool_call = update_tool_call(tool_call_id, status="pending")
 
         future = asyncio.run_coroutine_threadsafe(
-            self.connection.request_permission(
-                options=options,
-                session_id=self.session_id,
-                tool_call=tool_call,
-            ),
+            self._permission_or_cancel(options, tool_call),
             self.loop,
         )
+        self._permission_future = future
 
         try:
             response = future.result()
-            if response.outcome.outcome == "cancelled":
+            if response is None:
+                approved = False
+            elif response.outcome.outcome == "cancelled":
                 approved = False
             elif response.outcome.outcome == "selected":
                 selected = next(
@@ -327,9 +370,13 @@ class ACPIO(InputOutput):
                 )
             else:
                 approved = False
+        except asyncio.CancelledError:
+            approved = False
         except Exception as e:
             self.tool_error(f"Permission request failed: {e}")
             approved = False
+        finally:
+            self._permission_future = None
 
         self._send_update(
             update_tool_call(

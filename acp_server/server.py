@@ -155,15 +155,24 @@ class AiderAgent(Agent):
 
         prompt_text = "\n".join(text_parts)
 
-        import asyncio
+        if session.prompt_running:
+            raise ValueError("Prompt already in progress for this session")
 
-        asyncio.create_task(
-            session.run_prompt(prompt_text, resource_names=resource_names)
+        stop_reason = await session.run_prompt(
+            prompt_text, resource_names=resource_names
         )
 
-        return PromptResponse(
-            message_id=message_id or str(uuid.uuid4()), stop_reason="end_turn"
-        )
+        response_kwargs: dict[str, Any] = {"stop_reason": stop_reason}
+        if message_id is not None:
+            response_kwargs["user_message_id"] = message_id
+        return PromptResponse(**response_kwargs)
+
+    async def cancel(self, session_id: str, **kwargs: Any) -> None:
+        session = self.sessions.get(session_id)
+        if session is None:
+            self.logger.warning("Cancel: session %s not found", session_id)
+            return
+        session.cancel()
 
     async def list_sessions(
         self,

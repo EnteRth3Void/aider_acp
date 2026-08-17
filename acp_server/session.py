@@ -1,13 +1,17 @@
 import asyncio
 import logging
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional, Any
+from typing import Literal, Optional, Any
+
+StopReason = Literal["end_turn", "cancelled"]
 from aider.coders import Coder
 from acp.schema import ClientCapabilities
 from aider_bridge.file_mentions import apply_at_mentions
 from aider_bridge.io_bridge import ACPIO
 from aider_bridge.factory import create_coder
+
 
 def _fs_flag(capabilities: Optional[ClientCapabilities], name: str) -> bool:
     if capabilities is None:
@@ -42,6 +46,7 @@ class AiderSession:
             self.logger.warning(
                 "Client did not advertise fs.writeTextFile; overlay will flush to disk"
             )
+        self.cancelled = threading.Event()
         self.io = ACPIO(
             session_id=session_id,
             connection=connection,
@@ -49,9 +54,11 @@ class AiderSession:
             root=self.cwd,
             write_via_client=write_via_client,
             read_via_client=read_via_client,
+            cancelled_event=self.cancelled,
         )
         self.coder: Optional[Coder] = None
         self.executor = ThreadPoolExecutor(max_workers=1)
+        self._prompt_running = False
         self.logger.info(
             "[paths] session init session_id=%s cwd=%s io.root=%s additional_directories=%r",
             session_id,
@@ -94,51 +101,76 @@ class AiderSession:
         await self.loop.run_in_executor(self.executor, _init)
 
 
+    @property
+    def prompt_running(self) -> bool:
+        return self._prompt_running
+
+    def cancel(self) -> None:
+        self.logger.info("Cancelling session %s", self.session_id)
+        self.cancelled.set()
+        self.loop.call_soon_threadsafe(self.io.signal_async_cancel)
+
+    def _reset_cancel_state(self) -> None:
+        self.cancelled.clear()
+        self.io.reset_async_cancel()
+
     async def run_prompt(
         self, prompt_text: str, resource_names: Optional[list[str]] = None
-    ):
-        self.logger.info("Running prompt with text: %s", prompt_text)
-        self.logger.debug("Resource names: %s", resource_names)
+    ) -> StopReason:
+        if self._prompt_running:
+            raise RuntimeError("Prompt already running for this session")
 
-        if not self.coder:
-            self.logger.debug("Coder not initialized, initializing now")
-            await self.initialize_coder()
+        self._prompt_running = True
+        self._reset_cancel_state()
+        try:
+            self.logger.info("Running prompt with text: %s", prompt_text)
+            self.logger.debug("Resource names: %s", resource_names)
 
-        def _run():
-            import sys
-            import contextlib
+            if not self.coder:
+                self.logger.debug("Coder not initialized, initializing now")
+                await self.initialize_coder()
 
-            self.logger.info(
-                "[paths] run_prompt before chdir session_id=%s session.cwd=%s coder.root=%s getcwd=%s",
-                self.session_id,
-                self.cwd,
-                self.coder.root if self.coder else None,
-                os.getcwd(),
-            )
-            os.chdir(self.cwd)
-            self.logger.info(
-                "[paths] run_prompt after chdir session_id=%s getcwd=%s io.root=%s coder.root=%s",
-                self.session_id,
-                os.getcwd(),
-                self.io.root,
-                self.coder.root if self.coder else None,
-            )
-            with contextlib.redirect_stdout(sys.stderr):
-                apply_at_mentions(
-                    self.coder,
-                    prompt_text,
+            def _run() -> StopReason:
+                import sys
+                import contextlib
+
+                self.logger.info(
+                    "[paths] run_prompt before chdir session_id=%s session.cwd=%s coder.root=%s getcwd=%s",
+                    self.session_id,
                     self.cwd,
-                    self.additional_directories,
-                    extra_mentions=resource_names,
+                    self.coder.root if self.coder else None,
+                    os.getcwd(),
                 )
-                self.logger.debug("Running coder with message: %s", prompt_text)
-                self.coder.run(with_message=prompt_text)
-                self.logger.debug("Coder run completed")
-                flushed = self.io.flush_pending_writes()
-                self.logger.info("[overlay] flushed %d file(s)", len(flushed))
-                self._send_usage()
+                os.chdir(self.cwd)
+                self.logger.info(
+                    "[paths] run_prompt after chdir session_id=%s getcwd=%s io.root=%s coder.root=%s",
+                    self.session_id,
+                    os.getcwd(),
+                    self.io.root,
+                    self.coder.root if self.coder else None,
+                )
+                with contextlib.redirect_stdout(sys.stderr):
+                    apply_at_mentions(
+                        self.coder,
+                        prompt_text,
+                        self.cwd,
+                        self.additional_directories,
+                        extra_mentions=resource_names,
+                    )
+                    self.logger.debug("Running coder with message: %s", prompt_text)
+                    self.coder.run(with_message=prompt_text)
+                    self.logger.debug("Coder run completed")
+                    if self.cancelled.is_set():
+                        self.io.clear_overlay()
+                        return "cancelled"
+                    flushed = self.io.flush_pending_writes()
+                    self.logger.info("[overlay] flushed %d file(s)", len(flushed))
+                    self._send_usage()
+                    return "end_turn"
 
-        await self.loop.run_in_executor(self.executor, _run)
+            return await self.loop.run_in_executor(self.executor, _run)
+        finally:
+            self._prompt_running = False
 
     def _send_usage(self) -> None:
         if not self.coder:
@@ -151,4 +183,5 @@ class AiderSession:
 
     def close(self):
         self.logger.info("Closing session")
+        self.cancel()
         self.executor.shutdown(wait=False)

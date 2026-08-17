@@ -13,13 +13,13 @@ logger = logging.getLogger(__name__)
 
 # @ must follow whitespace or start of string (avoids matching user@example.com)
 AT_MENTION_RE = re.compile(r"(?<!\S)@([^\s@]+)")
-# Do not strip "." — that is part of file extensions (e.g. doku.pp)
+# Do not strip "." — that is part of file extensions (e.g. notes.md)
 TRAILING_PUNCT = ",;:!?)]}\"'"
 
 
 def _clean_path_ref(path_ref: str) -> str:
     path_ref = path_ref.rstrip(TRAILING_PUNCT)
-    # Strip one trailing sentence period: "@doku.pp." -> "doku.pp"
+    # Strip one trailing sentence period: "@notes.md." -> "notes.md"
     if path_ref.endswith(".") and path_ref.count(".") > 1:
         path_ref = path_ref[:-1]
     return path_ref

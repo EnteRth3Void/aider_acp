@@ -1,6 +1,8 @@
+import asyncio
 import os
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -258,6 +260,162 @@ class WorkspaceSkipTests(unittest.TestCase):
 
             files = iter_workspace_relative_files(root, FakeCoder(), ignore=ignore)
             self.assertEqual(files, ["hello.py", "notes.log"])
+
+
+class FakeConnWithPermission(FakeConn):
+    async def request_permission(self, options, session_id, tool_call, **kwargs):
+        await asyncio.Event().wait()
+
+
+class PromptLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_prompt_blocks_until_run_prompt_finishes(self):
+        from acp.schema import TextContentBlock
+        from acp_server.server import AiderAgent
+
+        order: list[str] = []
+
+        class SlowSession:
+            cwd = "/tmp"
+            coder = None
+            prompt_running = False
+
+            class _IO:
+                root = "/tmp"
+
+            io = _IO()
+
+            async def run_prompt(self, prompt_text, resource_names=None):
+                order.append("run_start")
+                await asyncio.sleep(0.05)
+                order.append("run_end")
+                return "end_turn"
+
+        agent = AiderAgent()
+        agent.sessions["s1"] = SlowSession()
+        order.append("before")
+        response = await agent.prompt(
+            [TextContentBlock(text="hi", type="text")], session_id="s1"
+        )
+        order.append("after")
+
+        self.assertEqual(
+            order, ["before", "run_start", "run_end", "after"]
+        )
+        self.assertEqual(response.stop_reason, "end_turn")
+
+    async def test_user_message_id_only_when_provided(self):
+        from acp.schema import TextContentBlock
+        from acp_server.server import AiderAgent
+
+        class InstantSession:
+            cwd = "/tmp"
+            coder = None
+            prompt_running = False
+
+            class _IO:
+                root = "/tmp"
+
+            io = _IO()
+
+            async def run_prompt(self, prompt_text, resource_names=None):
+                return "end_turn"
+
+        agent = AiderAgent()
+        agent.sessions["s1"] = InstantSession()
+        agent.sessions["s2"] = InstantSession()
+
+        with_id = await agent.prompt(
+            [TextContentBlock(text="hi", type="text")],
+            session_id="s1",
+            message_id="msg-123",
+        )
+        without_id = await agent.prompt(
+            [TextContentBlock(text="hi", type="text")], session_id="s2"
+        )
+
+        self.assertEqual(with_id.user_message_id, "msg-123")
+        self.assertIsNone(without_id.user_message_id)
+
+    async def test_cancel_before_flush_skips_writes(self):
+        from acp_server.session import AiderSession
+
+        loop = asyncio.get_running_loop()
+
+        class FakeIO:
+            root = "/tmp"
+
+            def __init__(self):
+                self.flush_called = False
+                self.clear_called = False
+
+            def flush_pending_writes(self):
+                self.flush_called = True
+                return []
+
+            def clear_overlay(self):
+                self.clear_called = True
+
+            def reset_async_cancel(self):
+                pass
+
+        class FakeCoder:
+            root = "/tmp"
+
+            def __init__(self, session):
+                self.session = session
+
+            def run(self, with_message=None):
+                self.session.cancelled.set()
+
+        fake_io = FakeIO()
+        session = AiderSession(
+            session_id="s1",
+            connection=FakeConn(),
+            loop=loop,
+            cwd=tempfile.gettempdir(),
+        )
+        session.io = fake_io
+        session.coder = FakeCoder(session)
+
+        class ImmediateLoop:
+            async def run_in_executor(self, executor, func):
+                return func()
+
+        session.loop = ImmediateLoop()
+
+        stop_reason = await session.run_prompt("hello")
+
+        self.assertEqual(stop_reason, "cancelled")
+        self.assertTrue(fake_io.clear_called)
+        self.assertFalse(fake_io.flush_called)
+
+    def test_confirm_ask_unblocks_on_cancel(self):
+        loop = asyncio_new_running_loop()
+        self.addCleanup(lambda: stop_loop(loop))
+        cancelled = threading.Event()
+        conn = FakeConnWithPermission()
+        io = ACPIO(
+            session_id="s1",
+            connection=conn,
+            loop=loop,
+            root=tempfile.gettempdir(),
+            cancelled_event=cancelled,
+        )
+
+        result: list[bool] = []
+
+        def ask():
+            result.append(io.confirm_ask("Proceed?"))
+
+        thread = threading.Thread(target=ask)
+        thread.start()
+        time.sleep(0.1)
+        cancelled.set()
+        loop.call_soon_threadsafe(io.signal_async_cancel)
+        thread.join(timeout=2)
+
+        self.assertEqual(len(result), 1)
+        self.assertFalse(result[0])
 
 
 def asyncio_new_running_loop():

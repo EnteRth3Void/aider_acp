@@ -14,7 +14,7 @@ Agent-Methoden ohne Handler. Zed kann sie nicht nutzen.
 
 | Methode | Was Zed damit macht |
 |---|---|
-| `session/cancel` | Stop-Button. Ohne Handler läuft Aider weiter. |
+| ~~`session/cancel`~~ | ~~Stop-Button. Ohne Handler läuft Aider weiter.~~ **Erledigt:** `cancel` setzt Session-Event, bricht `confirm_ask` ab, überspringt Flush. |
 | `session/load` | Thread-History und „Import Threads“. Nur bei `loadSession: true`. |
 | `authenticate` | Login im Agent Panel. Keys gehen aktuell nur über Env. |
 | `session/set_mode` | Mode-Picker (Ask / Code / Architect o.ä.). |
@@ -63,13 +63,11 @@ Vorhanden, aber semantisch falsch, lückenhaft oder für Zed unsichtbar.
 
 ### Prompt-Lifecycle (v1)
 
-`session/prompt` muss den Turn **blockieren** und erst danach `stopReason` liefern.
+~~`session/prompt` muss den Turn **blockieren** und erst danach `stopReason` liefern.~~
 
-Aktuell: sofort `end_turn`, Aider läuft im Hintergrund-Task.
+**Erledigt:** `session/prompt` blockiert bis `run_prompt` fertig ist; `stopReason` ist `end_turn` oder `cancelled`. `userMessageId` wird nur zurückgegeben, wenn Zed `messageId` mitschickt.
 
-Folge in Zed: Spinner weg, Cancel wirkungslos, nächster Prompt zu früh möglich.
-
-`PromptResponse` setzt `message_id` statt `userMessageId`. Token-`usage` fehlt.
+Offen: Token-`usage` in `PromptResponse` fehlt weiterhin.
 
 ### Capabilities nicht advertised
 
@@ -111,7 +109,7 @@ Nur Aider-`confirm_ask` geht über `session/request_permission`. File-Writes und
 
 ### Session-Lebenszyklus
 
-- `close_session` fährt den Executor mit `wait=False` herunter, ohne den laufenden Prompt zu canceln.
+- ~~`close_session` fährt den Executor mit `wait=False` herunter, ohne den laufenden Prompt zu canceln.~~ **Teilweise:** `close_session` signalisiert jetzt Cancel vor Executor-Shutdown; LLM-HTTP kann trotzdem noch laufen.
 - `list_sessions` ignoriert `cwd`, `cursor`, `additional_directories`. Keine Pagination, kein `updatedAt`.
 - Sessions leben nur im Prozessspeicher. Nach Restart ist die ID weg — `session/load` fehlt sowieso.
 - Globales `os.chdir` in der Session: bei mehreren parallelen Zed-Threads riskant.
@@ -158,7 +156,7 @@ Dinge, die existieren (Protokoll, SDK oder eigener Code), aber nicht angebunden 
 - `mcp_servers` an `AiderSession` — nur abgelegt
 - `client_capabilities` / `client_info` in `initialize`
 - `list_sessions`: `cwd`, `cursor`, `additional_directories`
-- `prompt`: Image-, Audio-, Embedded-Inhalt; `message_id` wird nicht als `userMessageId` zurückgegeben
+- `prompt`: Image-, Audio-, Embedded-Inhalt; ~~`message_id` wird nicht als `userMessageId` zurückgegeben~~ **Erledigt** (nur Echo wenn gesendet)
 
 ### Toter / unverbundener eigener Code
 
@@ -168,7 +166,6 @@ Dinge, die existieren (Protokoll, SDK oder eigener Code), aber nicht angebunden 
 | `AgentCapabilities` u.a. in `server.py` | Importiert, nie in `InitializeResponse` gesetzt. Ebenso ungenutzte Request-Typen (`InitializeRequest`, `NewSessionRequest`, …). |
 | Modul-Logger `logger` in `server.py` | Nach Umstellung auf `self.logger` ungenutzt; Extra-Console-Handler bleibt. |
 | `ext_method` / `ext_notification` | Leere Stubs. |
-| `doku.pp` | Platzhalter, unversioniert. |
 
 ### Aider-Funktionen ohne ACP-Oberfläche
 
