@@ -46,6 +46,7 @@ class AiderAgent(Agent):
         self.logger = logging.getLogger(__name__)
         self.sessions: Dict[str, AiderSession] = {}
         self.client: Optional[Client] = None
+        self.client_capabilities: Optional[ClientCapabilities] = None
 
     def on_connect(self, conn: Client) -> None:
         self.client = conn
@@ -59,6 +60,13 @@ class AiderAgent(Agent):
         **kwargs: Any,
     ) -> InitializeResponse:
         self.logger.info("Initializing with protocol version %s", protocol_version)
+        self.client_capabilities = client_capabilities
+        fs = getattr(client_capabilities, "fs", None) if client_capabilities else None
+        self.logger.info(
+            "Client fs capabilities writeTextFile=%s readTextFile=%s",
+            getattr(fs, "write_text_file", False) if fs else False,
+            getattr(fs, "read_text_file", False) if fs else False,
+        )
         return InitializeResponse(
             protocol_version=protocol_version,
             agent_info=Implementation(
@@ -87,7 +95,8 @@ class AiderAgent(Agent):
             loop=loop,
             cwd=cwd,
             additional_directories=additional_directories,
-            mcp_servers=mcp_servers
+            mcp_servers=mcp_servers,
+            client_capabilities=self.client_capabilities,
         )
         self.sessions[session_id] = session
         self.logger.info(

@@ -80,6 +80,32 @@ async def test_server():
                             process.stdin.write(json.dumps(response).encode() + b"\n")
                             await process.stdin.drain()
                             print("[CLIENT] Sent approval.")
+                        elif method == "fs/write_text_file":
+                            params = msg["params"]
+                            print(
+                                f"\n[CLIENT] fs/write_text_file path={params.get('path')} "
+                                f"bytes={len(params.get('content') or '')}"
+                            )
+                            response = {
+                                "jsonrpc": "2.0",
+                                "id": msg["id"],
+                                "result": {},
+                            }
+                            process.stdin.write(json.dumps(response).encode() + b"\n")
+                            await process.stdin.drain()
+                        elif method == "fs/read_text_file":
+                            params = msg["params"]
+                            print(f"\n[CLIENT] fs/read_text_file path={params.get('path')}")
+                            response = {
+                                "jsonrpc": "2.0",
+                                "id": msg["id"],
+                                "error": {
+                                    "code": -32000,
+                                    "message": "not implemented in test client",
+                                },
+                            }
+                            process.stdin.write(json.dumps(response).encode() + b"\n")
+                            await process.stdin.drain()
                         else:
                             print(f"\n[CLIENT] Received unknown request: {method}")
                     else:
@@ -107,7 +133,10 @@ async def test_server():
         print("Sending initialize...")
         resp = await send_request("initialize", {
             "protocolVersion": 1,
-            "clientInfo": {"name": "test-client", "version": "0.1.0"}
+            "clientInfo": {"name": "test-client", "version": "0.1.0"},
+            "clientCapabilities": {
+                "fs": {"readTextFile": True, "writeTextFile": True}
+            }
         }, 1)
         print(f"Initialize response: {resp}")
 

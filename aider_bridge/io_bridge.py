@@ -1,17 +1,25 @@
 import asyncio
 import logging
 import uuid
-from typing import Any
+from typing import Any, Optional
 
 from acp.agent.connection import AgentSideConnection
-from acp.helpers import start_tool_call, text_block, tool_content, update_tool_call
+from acp.helpers import (
+    start_tool_call,
+    text_block,
+    tool_content,
+    tool_diff_content,
+    update_tool_call,
+)
 from acp.schema import (
     AgentMessageChunk,
     AgentThoughtChunk,
     PermissionOption,
     TextContentBlock,
+    ToolCallLocation,
 )
 from aider.io import InputOutput
+from aider.utils import is_image_file, safe_abs_path
 
 
 class ACPIO(InputOutput):
@@ -20,27 +28,158 @@ class ACPIO(InputOutput):
         session_id: str,
         connection: AgentSideConnection,
         loop: asyncio.AbstractEventLoop,
+        write_via_client: bool = False,
+        read_via_client: bool = False,
         **kwargs,
     ):
         self.logger = logging.getLogger(__name__)
         self.session_id = session_id
         self.connection = connection
         self.loop = loop
+        self.write_via_client = write_via_client
+        self.read_via_client = read_via_client
+        self._overlay: dict[str, str] = {}
+        self._overlay_originals: dict[str, Optional[str]] = {}
         super().__init__(pretty=False, **kwargs)
         self.logger.info(
-            "[paths] ACPIO init session_id=%s root=%s",
+            "[paths] ACPIO init session_id=%s root=%s write_via_client=%s read_via_client=%s",
             session_id,
             self.root,
+            write_via_client,
+            read_via_client,
         )
 
-    def _send_update(self, update: Any):
+    def _abs_path(self, filename) -> str:
+        return str(safe_abs_path(filename))
+
+    def _run_on_loop(self, coro):
+        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+        return future.result()
+
+    def _send_update(self, update: Any, wait: bool = False):
         self.logger.debug("Sending update: %s", update)
-        self.logger.debug("Preparing to send update: %s", update)
         future = asyncio.run_coroutine_threadsafe(
             self.connection.session_update(session_id=self.session_id, update=update),
             self.loop,
         )
-        future.add_done_callback(lambda f: self.logger.debug("Update sent successfully"))
+        if wait:
+            future.result()
+        else:
+            future.add_done_callback(
+                lambda f: self.logger.debug("Update sent successfully")
+            )
+
+    def pending_writes(self) -> list[tuple[str, Optional[str], str]]:
+        return [
+            (path, self._overlay_originals.get(path), content)
+            for path, content in self._overlay.items()
+        ]
+
+    def clear_overlay(self) -> None:
+        self._overlay.clear()
+        self._overlay_originals.clear()
+
+    def _read_baseline(self, path: str) -> Optional[str]:
+        if self.read_via_client:
+            try:
+                response = self._run_on_loop(
+                    self.connection.read_text_file(
+                        path=path, session_id=self.session_id
+                    )
+                )
+                return response.content
+            except Exception as e:
+                self.logger.warning(
+                    "fs/read_text_file failed for %s, falling back to disk: %s",
+                    path,
+                    e,
+                )
+        return super().read_text(path, silent=True)
+
+    def read_text(self, filename, silent=False):
+        if is_image_file(filename):
+            return super().read_text(filename, silent=silent)
+
+        path = self._abs_path(filename)
+        if path in self._overlay:
+            return self._overlay[path]
+        if self.read_via_client:
+            try:
+                response = self._run_on_loop(
+                    self.connection.read_text_file(
+                        path=path, session_id=self.session_id
+                    )
+                )
+                return response.content
+            except Exception as e:
+                self.logger.warning(
+                    "fs/read_text_file failed for %s, falling back to disk: %s",
+                    path,
+                    e,
+                )
+        return super().read_text(filename, silent=silent)
+
+    def write_text(self, filename, content, max_retries=5, initial_delay=0.1):
+        if self.dry_run:
+            return
+        path = self._abs_path(filename)
+        if path not in self._overlay_originals:
+            self._overlay_originals[path] = self._read_baseline(path)
+        self._overlay[path] = content
+        self.logger.info("[overlay] staged write path=%s bytes=%d", path, len(content))
+
+    def flush_pending_writes(self) -> list[str]:
+        pending = self.pending_writes()
+        if not pending:
+            return []
+
+        flushed = []
+        if self.write_via_client:
+            for path, old_text, new_text in pending:
+                self._flush_file_via_client(path, old_text, new_text)
+                flushed.append(path)
+        else:
+            self.logger.warning(
+                "Client has no fs.writeTextFile; writing %d overlay file(s) to disk",
+                len(pending),
+            )
+            for path, _old_text, new_text in pending:
+                super().write_text(path, new_text)
+                flushed.append(path)
+
+        self.clear_overlay()
+        return flushed
+
+    def _flush_file_via_client(
+        self, path: str, old_text: Optional[str], new_text: str
+    ) -> None:
+        tool_call_id = str(uuid.uuid4())
+        title = f"Edit {path}"
+        self._send_update(
+            start_tool_call(
+                tool_call_id=tool_call_id,
+                title=title,
+                kind="edit",
+                status="pending",
+                content=[tool_diff_content(path, new_text, old_text)],
+                locations=[ToolCallLocation(path=path)],
+            ),
+            wait=True,
+        )
+        try:
+            self._run_on_loop(
+                self.connection.write_text_file(
+                    content=new_text, path=path, session_id=self.session_id
+                )
+            )
+            self._send_update(
+                update_tool_call(tool_call_id, status="completed"), wait=True
+            )
+        except Exception as e:
+            self.logger.error("fs/write_text_file failed for %s: %s", path, e)
+            self._send_update(update_tool_call(tool_call_id, status="failed"), wait=True)
+            self.tool_error(f"ACP write failed, saving to disk: {path}: {e}")
+            super().write_text(path, new_text)
 
     def ai_output(self, content: str):
         # Aider calls this for the final AI response

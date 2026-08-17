@@ -4,9 +4,19 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Any
 from aider.coders import Coder
+from acp.schema import ClientCapabilities
 from aider_bridge.file_mentions import apply_at_mentions
 from aider_bridge.io_bridge import ACPIO
 from aider_bridge.factory import create_coder
+
+def _fs_flag(capabilities: Optional[ClientCapabilities], name: str) -> bool:
+    if capabilities is None:
+        return False
+    fs = getattr(capabilities, "fs", None)
+    if fs is None:
+        return False
+    return bool(getattr(fs, name, False))
+
 
 class AiderSession:
     def __init__(
@@ -16,7 +26,8 @@ class AiderSession:
         loop: asyncio.AbstractEventLoop, 
         cwd: str,
         additional_directories: Optional[list[str]] = None,
-        mcp_servers: Optional[list[Any]] = None
+        mcp_servers: Optional[list[Any]] = None,
+        client_capabilities: Optional[ClientCapabilities] = None,
     ):
         self.logger = logging.getLogger(__name__)
         self.session_id = session_id
@@ -25,8 +36,19 @@ class AiderSession:
         self.cwd = os.path.abspath(cwd)
         self.additional_directories = additional_directories or []
         self.mcp_servers = mcp_servers or []
+        write_via_client = _fs_flag(client_capabilities, "write_text_file")
+        read_via_client = _fs_flag(client_capabilities, "read_text_file")
+        if not write_via_client:
+            self.logger.warning(
+                "Client did not advertise fs.writeTextFile; overlay will flush to disk"
+            )
         self.io = ACPIO(
-            session_id=session_id, connection=connection, loop=loop, root=self.cwd
+            session_id=session_id,
+            connection=connection,
+            loop=loop,
+            root=self.cwd,
+            write_via_client=write_via_client,
+            read_via_client=read_via_client,
         )
         self.coder: Optional[Coder] = None
         self.executor = ThreadPoolExecutor(max_workers=1)
@@ -112,6 +134,8 @@ class AiderSession:
                 self.logger.debug("Running coder with message: %s", prompt_text)
                 self.coder.run(with_message=prompt_text)
                 self.logger.debug("Coder run completed")
+                flushed = self.io.flush_pending_writes()
+                self.logger.info("[overlay] flushed %d file(s)", len(flushed))
 
         await self.loop.run_in_executor(self.executor, _run)
 
