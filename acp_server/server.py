@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import uuid
@@ -36,6 +37,8 @@ from .model_catalog import (
     parse_catalog_env,
 )
 from .session import AiderSession
+
+COMMANDS_ADVERTISE_DELAY = 0.3
 
 # Logger erstellen
 logger = logging.getLogger("AiderAgent")
@@ -92,7 +95,6 @@ class AiderAgent(Agent):
             additional_directories,
         )
         session_id = str(uuid.uuid4())
-        import asyncio
         loop = asyncio.get_running_loop()
 
         configured_models = parse_catalog_env()
@@ -122,10 +124,19 @@ class AiderAgent(Agent):
             available_models,
         )
 
+        loop.create_task(self._advertise_commands(session_id))
+
         return NewSessionResponse(
             session_id=session_id,
             models=build_session_model_state(available_models, current_model_id),
         )
+
+    async def _advertise_commands(self, session_id: str) -> None:
+        await asyncio.sleep(COMMANDS_ADVERTISE_DELAY)
+        session = self.sessions.get(session_id)
+        if session is None:
+            return
+        await session.advertise_commands()
 
     async def prompt(
         self,

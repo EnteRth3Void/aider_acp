@@ -36,10 +36,10 @@ Agent-Methoden ohne Handler. Zed kann sie nicht nutzen.
 
 ### Session-Updates, die nie gesendet werden
 
-Zed rendert diese Typen im Agent Panel, der Adapter erzeugt sie nicht:
+Zed rendert diese Typen im Agent Panel; der Adapter erzeugt sie teils noch nicht:
 
 - `tool_call` mit `content` vom Typ `diff` — reviewbare File-Edits
-- `available_commands_update` — Slash-Commands (`/add`, `/commit`, …)
+- ~~`available_commands_update` — Slash-Commands (`/add`, `/commit`, …)~~ **Erledigt:** kuratiertes Set nach `session/new` (ohne Git-/Shell-Commands).
 - `current_mode_update`
 - `config_option_update`
 - `plan` / `agent_plan`
@@ -94,7 +94,9 @@ Antwort enthält nur `sessionId`. Es fehlen:
 - ~~`models` — keine Modellwahl~~ **Erledigt:** `models` mit `availableModels` + `currentModelId` aus `AIDER_ACP_MODELS` (gefiltert nach API-Keys).
 - `configOptions`
 
-Slash-Commands werden auch später nicht per `available_commands_update` nachgereicht.
+Slash-Commands werden nach `session/new` per `available_commands_update` angeboten (kuratiert, ohne Git).
+
+**Modellwahl-Workaround:** Solange Zed den externen Modell-Picker nicht rendert ([zed#59197](https://github.com/zed-industries/zed/issues/59197), Ursache [PR #58308](https://github.com/zed-industries/zed/pull/58308)), Modell per `/model`, `/weak-model`, `/editor-model` wechseln. Der eigentliche Zielweg ist ACP `configOptions` in `session/new` — separater Slice.
 
 ### Prompt-Blöcke
 
@@ -169,11 +171,11 @@ Dinge, die existieren (Protokoll, SDK oder eigener Code), aber nicht angebunden 
 
 ### Aider-Funktionen ohne ACP-Oberfläche
 
-Aider kann intern mehr, Zed sieht davon nichts:
+Aider kann intern mehr; über Slash-Commands nutzbar. Review-Modus blockiert nur Git- und Host-only-Commands (`/commit`, `/diff`, `/undo`, `/git`, `/lint`, Clipboard, `$EDITOR`, `/quit`, `/voice`):
 
-- Slash-Commands
-- Edit-Formate / Modes
-- Modellwechsel
-- `/undo`, `/commit`, `/diff`
-- Repo-Map
+- Slash-Commands — `/model`, `/add`, `/ls`, `/run`, `/web`, …; `SwitchCoder` wird abgefangen und Coder neu gebaut
+- Edit-Formate / Modes — `/ask`, `/code`, `/architect`, `/chat-mode`, `/context`, `/help`
+- Modellwechsel — `/model`, `/weak-model`, `/editor-model` (bis Zed-Picker da ist)
+- `/undo`, `/commit`, `/diff` — Git, im Review-Modus deaktiviert
+- Repo-Map — intern `map_tokens=0`; `/map` nicht im Menü
 - Auth gegenüber LLM-Providern

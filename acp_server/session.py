@@ -6,11 +6,51 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Literal, Optional, Any
 
 StopReason = Literal["end_turn", "cancelled"]
+from aider.commands import SwitchCoder
 from aider.coders import Coder
+from acp.helpers import update_available_commands
 from acp.schema import ClientCapabilities
 from aider_bridge.file_mentions import apply_at_mentions
 from aider_bridge.io_bridge import ACPIO
-from aider_bridge.factory import create_coder, check_model_keys
+from aider_bridge.factory import create_coder, check_model_keys, switch_coder
+from .available_commands import DENIED_COMMANDS, curated_available_commands
+
+
+REVIEW_MODE_DENIED_COMMANDS = DENIED_COMMANDS
+
+
+def _normalize_command_name(name: str) -> str:
+    return name.replace("-", "_")
+
+
+def _is_command(text: str) -> bool:
+    return text.lstrip().startswith(("/", "!"))
+
+
+def _command_name_from_text(text: str) -> str | None:
+    stripped = text.lstrip()
+    if not stripped:
+        return None
+    if stripped.startswith("!"):
+        return "run"
+    if stripped.startswith("/"):
+        first_word = stripped.split()[0]
+        return _normalize_command_name(first_word[1:])
+    return None
+
+
+def _format_model_announcement(coder: Coder) -> str:
+    main = coder.main_model.name
+    extras: list[str] = []
+    weak = getattr(coder, "weak_model", None)
+    if weak is not None and getattr(weak, "name", None):
+        extras.append(f"weak: {weak.name}")
+    editor = getattr(coder, "editor_model", None)
+    if editor is not None and getattr(editor, "name", None):
+        extras.append(f"editor: {editor.name}")
+    if extras:
+        return f"Model: {main}  ({', '.join(extras)})"
+    return f"Model: {main}"
 
 
 def _fs_flag(capabilities: Optional[ClientCapabilities], name: str) -> bool:
@@ -63,6 +103,7 @@ class AiderSession:
         self.current_model_id = current_model_id
         self.executor = ThreadPoolExecutor(max_workers=1)
         self._prompt_running = False
+        self.commands_advertised = False
         self.logger.info(
             "[paths] session init session_id=%s cwd=%s io.root=%s additional_directories=%r",
             session_id,
@@ -105,6 +146,27 @@ class AiderSession:
             )
 
         await self.loop.run_in_executor(self.executor, _init)
+        self._announce_active_model()
+
+    def _announce_active_model(self) -> None:
+        if not self.coder:
+            return
+        self.io.announce(_format_model_announcement(self.coder))
+
+    async def advertise_commands(self) -> None:
+        """Tell Zed which slash commands exist. Safe to call more than once."""
+        if self.commands_advertised or self.connection is None:
+            return
+        await self.connection.session_update(
+            session_id=self.session_id,
+            update=update_available_commands(curated_available_commands()),
+        )
+        self.commands_advertised = True
+        self.logger.info(
+            "Advertised %d slash commands for session %s",
+            len(curated_available_commands()),
+            self.session_id,
+        )
 
     async def set_model(self, model_id: str) -> None:
         if self._prompt_running:
@@ -157,6 +219,8 @@ class AiderSession:
             self.logger.info("Running prompt with text: %s", prompt_text)
             self.logger.debug("Resource names: %s", resource_names)
 
+            await self.advertise_commands()
+
             if not check_model_keys(self.io, self.current_model_id):
                 return "end_turn"
 
@@ -184,19 +248,45 @@ class AiderSession:
                     self.coder.root if self.coder else None,
                 )
                 with contextlib.redirect_stdout(sys.stderr):
-                    apply_at_mentions(
-                        self.coder,
-                        prompt_text,
-                        self.cwd,
-                        self.additional_directories,
-                        extra_mentions=resource_names,
-                    )
+                    is_command = _is_command(prompt_text)
+                    if is_command:
+                        cmd_name = _command_name_from_text(prompt_text)
+                        if cmd_name in REVIEW_MODE_DENIED_COMMANDS:
+                            display = prompt_text.lstrip().split()[0]
+                            self.io.tool_error(
+                                f"{display} ist im Review-Modus deaktiviert "
+                                "(Git- und host-only Commands wie Clipboard, Editor oder Exit)."
+                            )
+                            return "end_turn"
+                    else:
+                        apply_at_mentions(
+                            self.coder,
+                            prompt_text,
+                            self.cwd,
+                            self.additional_directories,
+                            extra_mentions=resource_names,
+                        )
                     self.logger.debug("Running coder with message: %s", prompt_text)
-                    self.coder.run(with_message=prompt_text)
+                    try:
+                        self.coder.run(with_message=prompt_text)
+                    except SwitchCoder as switch:
+                        self.coder = switch_coder(
+                            self.io, self.coder, self.cwd, **switch.kwargs
+                        )
+                        self.current_model_id = self.coder.main_model.name
+                        self._announce_active_model()
+                        return "end_turn"
                     self.logger.debug("Coder run completed")
                     if self.cancelled.is_set():
                         self.io.clear_overlay()
                         return "cancelled"
+                    if is_command:
+                        if self.io.pending_writes():
+                            flushed = self.io.flush_pending_writes()
+                            self.logger.info(
+                                "[overlay] flushed %d file(s)", len(flushed)
+                            )
+                        return "end_turn"
                     flushed = self.io.flush_pending_writes()
                     self.logger.info("[overlay] flushed %d file(s)", len(flushed))
                     self._send_usage()

@@ -86,3 +86,16 @@ def create_coder(
         **CODER_CREATE_KWARGS,
     )
     return _finalize_coder(coder, io, cwd, from_coder)
+
+
+def switch_coder(
+    io: ACPIO, old_coder: Coder, cwd: str | None = None, **switch_kwargs
+) -> Coder:
+    patch_run_cmd(io)
+    coder = Coder.create(
+        io=io,
+        from_coder=old_coder,
+        **CODER_CREATE_KWARGS,
+        **switch_kwargs,
+    )
+    return _finalize_coder(coder, io, cwd, from_coder=old_coder)

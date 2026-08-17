@@ -48,10 +48,22 @@ Which files enter the chat is controlled by `aider_acp.toml` (gitignore syntax).
 
 To use a different settings file: `AIDER_ACP_SETTINGS=/path/to/file.toml`.
 
+## Slash commands
+
+Until Zed renders the external-agent model picker ([zed#59197](https://github.com/zed-industries/zed/issues/59197)), switch models with Aider slash commands in the agent thread.
+
+Zed intercepts messages that start with `/` until it has received the command list (`available_commands_update`). That list is sent shortly after `session/new` and again on the first prompt, so Zed does not drop it during session setup ([zed#53161](https://github.com/zed-industries/zed/issues/53161)). If you still see `Available commands: none`, put a space before the slash so Zed treats it as a normal prompt, for example ` /model gpt-4.1`.
+
+The `/` menu lists Aider commands that work without git. Git-only commands (`/commit`, `/diff`, `/undo`, `/git`, `/lint`) and host-only ones (clipboard, `$EDITOR`, `/voice`, `/quit`) are omitted and rejected if typed.
+
+After each coder init or model switch, the agent posts a transparency line in chat, for example:
+
+`Model: gpt-4o  (weak: gpt-4o-mini, editor: gpt-4o)`
+
 ## Tests
 
 ```bash
-.venv/bin/python -m unittest test_overlay.py test_models.py -v
+.venv/bin/python -m unittest test_overlay.py test_models.py test_commands.py -v
 ```
 
 ## Internal notes
