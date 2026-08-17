@@ -1,20 +1,23 @@
 import asyncio
 import logging
 import sys
-import logging
+from pathlib import Path
+
 from acp.stdio import stdio_streams
 from acp.agent.connection import AgentSideConnection
 from acp_server.server import AiderAgent
 
-# Configure logging
+# Keep the log next to the adapter, not in the user's project cwd.
+_LOG_PATH = Path(__file__).resolve().parent / "aider_acp.log"
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler("aider_acp.log", mode="a"),
-        logging.StreamHandler()
+        logging.FileHandler(_LOG_PATH, mode="a"),
+        logging.StreamHandler(sys.stderr),
     ],
-    force=True
+    force=True,
 )
 logger = logging.getLogger(__name__)
 

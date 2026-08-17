@@ -7,25 +7,14 @@ from urllib.parse import unquote, urlparse
 
 from aider.utils import safe_abs_path
 
+from .ignore import WorkspaceIgnore
+
 logger = logging.getLogger(__name__)
 
 # @ must follow whitespace or start of string (avoids matching user@example.com)
 AT_MENTION_RE = re.compile(r"(?<!\S)@([^\s@]+)")
 # Do not strip "." — that is part of file extensions (e.g. doku.pp)
 TRAILING_PUNCT = ",;:!?)]}\"'"
-
-SKIP_DIR_NAMES = {
-    ".git",
-    ".venv",
-    "venv",
-    "node_modules",
-    "__pycache__",
-    ".aider.tags.cache.v4",
-    ".mypy_cache",
-    ".pytest_cache",
-    "dist",
-    "build",
-}
 
 
 def _clean_path_ref(path_ref: str) -> str:
@@ -62,10 +51,6 @@ def _is_basename_only(path_ref: str) -> bool:
     return "/" not in path_ref and "\\" not in path_ref
 
 
-def _should_skip_dir(name: str) -> bool:
-    return name in SKIP_DIR_NAMES or name.startswith(".")
-
-
 def find_file_by_basename(
     name: str,
     search_roots: list[Path],
@@ -74,8 +59,17 @@ def find_file_by_basename(
     for root in search_roots:
         if not root.is_dir():
             continue
+        ignore = WorkspaceIgnore.for_root(root)
         for dirpath, dirnames, filenames in os.walk(root, topdown=True):
-            dirnames[:] = [d for d in dirnames if not _should_skip_dir(d)]
+            rel_dir = Path(dirpath).relative_to(root)
+            dirnames[:] = [
+                d
+                for d in dirnames
+                if not ignore.skip(
+                    str(rel_dir / d) if str(rel_dir) != "." else d,
+                    is_dir=True,
+                )
+            ]
             if name not in filenames:
                 continue
             matches.append(str(safe_abs_path(Path(dirpath) / name)))

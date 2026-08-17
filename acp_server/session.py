@@ -136,8 +136,18 @@ class AiderSession:
                 self.logger.debug("Coder run completed")
                 flushed = self.io.flush_pending_writes()
                 self.logger.info("[overlay] flushed %d file(s)", len(flushed))
+                self._send_usage()
 
         await self.loop.run_in_executor(self.executor, _run)
+
+    def _send_usage(self) -> None:
+        if not self.coder:
+            return
+        used = int(getattr(self.coder, "total_tokens_sent", 0) or 0)
+        info = getattr(self.coder.main_model, "info", None) or {}
+        size = int(info.get("max_input_tokens") or 0)
+        cost = getattr(self.coder, "total_cost", None)
+        self.io.send_usage(used=used, size=size, cost_usd=cost)
 
     def close(self):
         self.logger.info("Closing session")

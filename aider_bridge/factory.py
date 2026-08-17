@@ -34,6 +34,9 @@ def create_coder(io: ACPIO, model_name: str = "gpt-4o", cwd: str | None = None):
         dirty_commits=False,
         use_git=True,
         map_tokens=0,
+        suggest_shell_commands=False,
+        auto_lint=False,
+        auto_test=False,
     )
     patch_coder_file_mentions(coder)
 

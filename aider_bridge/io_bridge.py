@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import uuid
 from typing import Any, Optional
 
@@ -14,12 +15,38 @@ from acp.helpers import (
 from acp.schema import (
     AgentMessageChunk,
     AgentThoughtChunk,
+    Cost,
     PermissionOption,
     TextContentBlock,
     ToolCallLocation,
+    UsageUpdate,
 )
 from aider.io import InputOutput
 from aider.utils import is_image_file, safe_abs_path
+
+# Aider streams SEARCH/REPLACE as assistant text; Zed already gets a proper diff tool_call.
+_FENCED_EDIT_RE = re.compile(
+    r"```[^\n]*\n[ \t]*<<<<<<< SEARCH\n.*?>>>>>>> REPLACE[ \t]*\n```[ \t]*\n?",
+    re.DOTALL,
+)
+_EDIT_BLOCK_RE = re.compile(
+    r"^[ \t]*<<<<<<< SEARCH\n.*?^[ \t]*>>>>>>> REPLACE[ \t]*\n?",
+    re.MULTILINE | re.DOTALL,
+)
+_APPLIED_EDIT_RE = re.compile(
+    r"^(Did not apply edit to |Applied edit to )\S+",
+    re.IGNORECASE,
+)
+_TOKENS_RE = re.compile(r"^Tokens:", re.IGNORECASE)
+
+
+def strip_aider_edit_blocks(message: str) -> str:
+    """Remove Aider SEARCH/REPLACE blocks; keep surrounding prose."""
+    if not message:
+        return message
+    text = _FENCED_EDIT_RE.sub("", message)
+    text = _EDIT_BLOCK_RE.sub("", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 class ACPIO(InputOutput):
@@ -182,21 +209,18 @@ class ACPIO(InputOutput):
             super().write_text(path, new_text)
 
     def ai_output(self, content: str):
-        # Aider calls this for the final AI response
-        self.logger.info("AI output received: %s", content)
-        chunk = AgentMessageChunk(
-            content=TextContentBlock(text=content, type="text"),
-            session_update="agent_message_chunk",
-        )
-        self._send_update(chunk)
+        # Aider uses this for chat-history only; assistant_output is what Zed should show.
+        self.logger.debug("AI history output (%d chars)", len(content or ""))
 
     def assistant_output(self, message: str, pretty=None):
-        # Aider calls this for intermediate/streaming output
         self.logger.info("Assistant output received: %s", message)
         if not message:
             return
+        visible = strip_aider_edit_blocks(message)
+        if not visible:
+            return
         chunk = AgentMessageChunk(
-            content=TextContentBlock(text=message, type="text"),
+            content=TextContentBlock(text=visible, type="text"),
             session_update="agent_message_chunk",
         )
         self._send_update(chunk)
@@ -218,16 +242,31 @@ class ACPIO(InputOutput):
         self._send_update(chunk)
 
     def tool_output(self, *messages: Any, **kwargs: Any):
-        # Aider calls this for tool logs/thoughts
-        self.logger.info("Tool output received: %s", messages)
-        content = " ".join(map(str, messages))
+        if kwargs.get("log_only"):
+            return
+        content = " ".join(map(str, messages)).strip()
         if not content:
             return
+        if _TOKENS_RE.match(content) or _APPLIED_EDIT_RE.match(content):
+            self.logger.info("Suppressed tool output: %s", content)
+            return
+        self.logger.info("Tool output received: %s", messages)
         chunk = AgentThoughtChunk(
             content=TextContentBlock(text=content, type="text"),
             session_update="agent_thought_chunk",
         )
-        self._send_update(chunk)
+        self._send_update(chunk, wait=True)
+
+    def send_usage(self, used: int, size: int, cost_usd: float | None = None) -> None:
+        used = max(int(used), 0)
+        size = max(int(size), used, 1)
+        cost = None
+        if cost_usd is not None:
+            cost = Cost(amount=float(cost_usd), currency="USD")
+        self._send_update(
+            UsageUpdate(session_update="usage_update", used=used, size=size, cost=cost),
+            wait=True,
+        )
 
     def tool_error(self, message: str = "", strip: bool = True):
         self.logger.error("Tool error: %s", message)

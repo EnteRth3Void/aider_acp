@@ -1,0 +1,32 @@
+# Adapter settings. Edit ignore patterns here instead of changing Python code.
+# Syntax is gitignore / .aiderignore (pathspec gitwildmatch).
+#
+# Layered on top of this file:
+#   - {project}/.gitignore          if honor_gitignore = true
+#   - {project}/.aiderignore        if honor_aiderignore = true
+#   - {project}/.aider_acp.toml     extra [workspace] ignore patterns
+#
+# Override this file with AIDER_ACP_SETTINGS=/path/to/file.toml
+
+[workspace]
+skip_dotfiles = true
+honor_gitignore = true
+honor_aiderignore = true
+ignore = [
+    "*.log",
+    "*.pyc",
+    "*.pyo",
+    "*.swp",
+    "*.swo",
+    ".DS_Store",
+    "__pycache__/",
+    ".venv/",
+    "venv/",
+    "node_modules/",
+    ".git/",
+    ".mypy_cache/",
+    ".pytest_cache/",
+    ".aider.tags.cache.v4/",
+    "dist/",
+    "build/",
+]
