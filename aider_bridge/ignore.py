@@ -4,8 +4,6 @@ from pathlib import Path
 
 import pathspec
 
-from .settings import WorkspaceSettings, load_workspace_settings
-
 logger = logging.getLogger(__name__)
 
 
@@ -27,30 +25,10 @@ def _posix(rel_path: str) -> str:
 
 
 class WorkspaceIgnore:
-    """gitignore-style matcher for workspace ingest and mention search."""
+    """Skip dotfiles, .gitignore, and .aiderignore during basename `@` search."""
 
-    def __init__(
-        self,
-        spec: pathspec.PathSpec,
-        skip_dotfiles: bool = True,
-    ):
+    def __init__(self, spec: pathspec.PathSpec):
         self.spec = spec
-        self.skip_dotfiles = skip_dotfiles
-
-    @classmethod
-    def from_settings(
-        cls,
-        settings: WorkspaceSettings,
-        project_root: str | Path,
-    ) -> "WorkspaceIgnore":
-        root = Path(project_root)
-        patterns = list(settings.ignore)
-        if settings.honor_gitignore:
-            patterns.extend(_read_pattern_file(root / ".gitignore"))
-        if settings.honor_aiderignore:
-            patterns.extend(_read_pattern_file(root / ".aiderignore"))
-        spec = pathspec.PathSpec.from_lines("gitignore", patterns)
-        return cls(spec=spec, skip_dotfiles=settings.skip_dotfiles)
 
     @classmethod
     def for_root(cls, project_root: str | Path) -> "WorkspaceIgnore":
@@ -61,7 +39,7 @@ class WorkspaceIgnore:
         posix = _posix(rel_path)
         if not posix:
             return False
-        if self.skip_dotfiles and Path(posix).name.startswith("."):
+        if Path(posix).name.startswith("."):
             return True
         if self.spec.match_file(posix):
             return True
@@ -72,8 +50,11 @@ class WorkspaceIgnore:
 
 @lru_cache(maxsize=32)
 def _cached_for_root(project_root: str) -> WorkspaceIgnore:
-    settings = load_workspace_settings(project_root)
-    return WorkspaceIgnore.from_settings(settings, project_root)
+    root = Path(project_root)
+    patterns = _read_pattern_file(root / ".gitignore")
+    patterns.extend(_read_pattern_file(root / ".aiderignore"))
+    spec = pathspec.PathSpec.from_lines("gitignore", patterns)
+    return WorkspaceIgnore(spec=spec)
 
 
 def clear_ignore_cache() -> None:

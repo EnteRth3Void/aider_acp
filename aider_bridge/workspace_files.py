@@ -31,7 +31,7 @@ def iter_workspace_relative_files(
     coder,
     ignore: WorkspaceIgnore | None = None,
 ) -> list[str]:
-    """Return relative file paths under root, applying settings/gitignore."""
+    """Return relative file paths under root, skipping gitignore/dotfiles."""
     root_path = Path(root)
     ignore = ignore or WorkspaceIgnore.for_root(root)
     files: list[str] = []
@@ -58,24 +58,3 @@ def iter_workspace_relative_files(
             files.append(rel_path)
 
     return sorted(set(files))
-
-
-def add_all_workspace_files(coder, root: str) -> list[str]:
-    """Add every workspace file to the coder, respecting ignore settings."""
-    workspace_files = iter_workspace_relative_files(root, coder)
-    logger.info(
-        "[paths] add_all_workspace_files root=%s repo=%s file_count=%d",
-        root,
-        bool(coder.repo),
-        len(workspace_files),
-    )
-
-    for rel_fname in workspace_files:
-        coder.add_rel_fname(rel_fname)
-
-    logger.info("[paths] coder.abs_fnames=%s", coder.abs_fnames)
-    logger.info(
-        "[paths] coder.get_inchat_relative_files()=%s",
-        coder.get_inchat_relative_files(),
-    )
-    return workspace_files

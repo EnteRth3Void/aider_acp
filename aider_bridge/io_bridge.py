@@ -39,6 +39,11 @@ _APPLIED_EDIT_RE = re.compile(
     re.IGNORECASE,
 )
 _TOKENS_RE = re.compile(r"^Tokens:", re.IGNORECASE)
+# Aider command status ("Added utils.py to the chat") is user-facing, not thinking.
+_CHAT_STATUS_RE = re.compile(
+    r"^(Added|Removed|Moved|Dropping|Converted)\b",
+    re.IGNORECASE,
+)
 
 
 def strip_aider_edit_blocks(message: str) -> str:
@@ -242,7 +247,9 @@ class ACPIO(InputOutput):
             return
         visible = strip_aider_edit_blocks(message)
         if not visible:
-            return
+            if self._overlay:
+                return
+            visible = message
         chunk = AgentMessageChunk(
             content=TextContentBlock(text=visible, type="text"),
             session_update="agent_message_chunk",
@@ -275,6 +282,9 @@ class ACPIO(InputOutput):
             self.logger.info("Suppressed tool output: %s", content)
             return
         self.logger.info("Tool output received: %s", messages)
+        if _CHAT_STATUS_RE.match(content):
+            self.announce(content)
+            return
         chunk = AgentThoughtChunk(
             content=TextContentBlock(text=content, type="text"),
             session_update="agent_thought_chunk",

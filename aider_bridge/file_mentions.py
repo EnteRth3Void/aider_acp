@@ -179,9 +179,47 @@ def add_files_to_coder(coder, abs_paths: list[str]) -> list[str]:
         added.append(abs_path)
     if added:
         coder.check_added_files()
-        coder.io.tool_output(f"Added to chat: {', '.join(added)}")
+        names = []
+        for abs_path in added:
+            try:
+                names.append(coder.get_rel_fname(abs_path))
+            except Exception:
+                names.append(abs_path)
+        coder.io.tool_output(
+            "\n".join(f"Added {name} to the chat" for name in names)
+        )
         ignore_conflicting_mentions(coder, added)
     return added
+
+
+def resolve_command_file_args(
+    resource_names: list[str],
+    cwd: str,
+    additional_directories: Optional[list[str]] = None,
+    io=None,
+) -> list[str]:
+    """Resolve Zed file attachments to abs paths for slash commands (/add, /drop, /read-only).
+
+    Slash commands are dispatched as raw text to Aider's command parser, which
+    never sees ACP resource blocks. This lets attachments work as if the user
+    had typed the path after the command.
+    """
+    abs_paths = []
+    for name in resource_names:
+        if not name:
+            continue
+        abs_path, ambiguous = resolve_to_abs_path(name, cwd, additional_directories)
+        if abs_path:
+            abs_paths.append(abs_path)
+            if len(ambiguous) > 1 and io is not None:
+                rel_matches = [os.path.relpath(m, cwd) for m in ambiguous]
+                io.tool_warning(
+                    f"Multiple files named {name}: {', '.join(rel_matches)}. "
+                    f"Using {os.path.relpath(abs_path, cwd)}."
+                )
+        elif io is not None:
+            io.tool_warning(f"Could not resolve attachment {name}")
+    return abs_paths
 
 
 def apply_at_mentions(

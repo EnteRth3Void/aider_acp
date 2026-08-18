@@ -2,6 +2,7 @@ import asyncio
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from acp_server.available_commands import curated_available_commands
@@ -85,6 +86,69 @@ class RunPromptCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stop_reason, "end_turn")
         apply_mock.assert_not_called()
 
+    async def test_ask_command_applies_at_mentions(self):
+        """Zed @-pills inside /ask arrive as resource_names; they must join chat context."""
+        session, _conn = await self._make_session()
+        with self._validate_ok():
+            with patch("acp_server.session.apply_at_mentions") as apply_mock:
+                with patch.object(session.coder, "run"):
+                    stop_reason = await session.run_prompt(
+                        "/ask Welche Funktionen?", resource_names=["utils.py"]
+                    )
+        self.assertEqual(stop_reason, "end_turn")
+        apply_mock.assert_called_once()
+        self.assertEqual(apply_mock.call_args.args[1], "/ask Welche Funktionen?")
+        self.assertEqual(apply_mock.call_args.kwargs["extra_mentions"], ["utils.py"])
+
+    async def test_add_command_splices_resource_attachment_path(self):
+        """Zed attachments arrive as resource_names, not text; /add must still see them."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        # run_prompt does a global os.chdir(self.cwd); restore before tmp is removed.
+        self.addCleanup(os.chdir, os.getcwd())
+        file_path = Path(tmp.name) / "notes.py"
+        file_path.write_text("print('hi')\n", encoding="utf-8")
+
+        conn = FakeConn()
+        loop = asyncio.get_running_loop()
+        session = AiderSession(
+            session_id="s1",
+            connection=conn,
+            loop=loop,
+            cwd=tmp.name,
+            available_model_ids=["gpt-4o"],
+            current_model_id="gpt-4o",
+        )
+        session.coder = FakeCoder()
+        captured = {}
+
+        def fake_run(with_message=None):
+            captured["message"] = with_message
+
+        with self._validate_ok():
+            with patch.object(session.coder, "run", side_effect=fake_run):
+                stop_reason = await session.run_prompt(
+                    "/add", resource_names=["notes.py"]
+                )
+
+        self.assertEqual(stop_reason, "end_turn")
+        self.assertIn(str(file_path), captured["message"])
+
+    async def test_ask_command_does_not_splice_attachment_into_command_text(self):
+        """/ask must not treat attachments as command args; they go via apply_at_mentions."""
+        session, _conn = await self._make_session()
+        captured = {}
+
+        def fake_run(with_message=None):
+            captured["message"] = with_message
+
+        with self._validate_ok():
+            with patch("acp_server.session.apply_at_mentions"):
+                with patch.object(session.coder, "run", side_effect=fake_run):
+                    await session.run_prompt("/ask hi", resource_names=["notes.py"])
+
+        self.assertEqual(captured["message"], "/ask hi")
+
     async def test_denylist_blocks_commit_without_run(self):
         session, conn = await self._make_session()
         run_called = False
@@ -147,6 +211,32 @@ class RunPromptCommandTests(unittest.IsolatedAsyncioTestCase):
             if getattr(u, "session_update", None) == "agent_message_chunk"
         ]
         self.assertTrue(any("Model: gpt-4.1" in u.content.text for u in chunks))
+
+    async def test_ask_switch_skips_announcement_when_disabled(self):
+        session, conn = await self._make_session()
+        new_coder = FakeCoder()
+        session.coder = FakeCoder(
+            run_side_effect=SwitchCoder(
+                edit_format="code",
+                summarize_from_coder=False,
+                from_coder=FakeCoder(),
+                show_announcements=False,
+            )
+        )
+
+        with self._validate_ok():
+            with patch(
+                "acp_server.session.switch_coder", return_value=new_coder
+            ):
+                stop_reason = await session.run_prompt("/ask what is this?")
+
+        self.assertEqual(stop_reason, "end_turn")
+        chunks = [
+            u
+            for u in conn.updates
+            if getattr(u, "session_update", None) == "agent_message_chunk"
+        ]
+        self.assertFalse(any("Model:" in getattr(u.content, "text", "") for u in chunks))
 
     async def test_command_before_coder_initializes_coder(self):
         session, conn = await self._make_session()
@@ -284,8 +374,46 @@ class TransparencyTests(unittest.IsolatedAsyncioTestCase):
             for u in conn.updates
             if getattr(u, "session_update", None) == "agent_message_chunk"
         ]
-        self.assertTrue(any("Model: gpt-4o" in u.content.text for u in chunks))
-        self.assertTrue(any("weak: gpt-4o-mini" in u.content.text for u in chunks))
+        announcement = next(
+            (u.content.text for u in chunks if "Model: gpt-4o" in u.content.text),
+            None,
+        )
+        self.assertIsNotNone(announcement)
+        self.assertIn("weak: gpt-4o-mini", announcement)
+        self.assertTrue(announcement.endswith("\n\n"))
+
+
+class SwitchCoderFactoryTests(unittest.TestCase):
+    def test_switch_coder_accepts_from_coder_in_kwargs(self):
+        """Aider /ask|/help raise SwitchCoder(from_coder=...); must not double-pass."""
+        from aider_bridge.factory import switch_coder
+
+        old = FakeCoder()
+        temp = FakeCoder()
+        created = FakeCoder()
+        created.abs_root_path_cache = {}
+        created.get_inchat_relative_files = lambda: []
+
+        class FakeIO:
+            root = tempfile.gettempdir()
+
+        with patch("aider_bridge.factory.patch_run_cmd"):
+            with patch("aider_bridge.factory.patch_coder_file_mentions"):
+                with patch("aider_bridge.factory.Coder.create", return_value=created) as create:
+                    result = switch_coder(
+                        FakeIO(),
+                        old,
+                        tempfile.gettempdir(),
+                        from_coder=temp,
+                        edit_format="code",
+                        summarize_from_coder=False,
+                        show_announcements=False,
+                    )
+
+        self.assertIs(result, created)
+        kwargs = create.call_args.kwargs
+        self.assertIs(kwargs["from_coder"], temp)
+        self.assertNotIn("show_announcements", kwargs)
 
 
 if __name__ == "__main__":

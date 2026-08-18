@@ -8,7 +8,6 @@ from aider.utils import safe_abs_path
 from .file_mentions import patch_coder_file_mentions
 from .io_bridge import ACPIO
 from .shell_commands import patch_run_cmd
-from .workspace_files import add_all_workspace_files
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +16,7 @@ CODER_CREATE_KWARGS = {
     "dirty_commits": False,
     "use_git": True,
     "map_tokens": 0,
+    "stream": False,
     "suggest_shell_commands": False,
     "auto_lint": False,
     "auto_test": False,
@@ -44,9 +44,6 @@ def _finalize_coder(
     root = safe_abs_path(cwd or io.root or os.getcwd())
     coder.root = root
     coder.abs_root_path_cache.clear()
-
-    if from_coder is None:
-        add_all_workspace_files(coder, root)
 
     logger.info(
         "[paths] create_coder done coder.root=%s io.root=%s getcwd=%s coder.repo=%s inchat_files=%s",
@@ -91,11 +88,16 @@ def create_coder(
 def switch_coder(
     io: ACPIO, old_coder: Coder, cwd: str | None = None, **switch_kwargs
 ) -> Coder:
+    """Rebuild the coder after Aider raises SwitchCoder.
+
+    Matches Aider CLI: start from the current coder, then let switch.kwargs
+    override (including from_coder for /ask|/help one-shot modes).
+    """
     patch_run_cmd(io)
-    coder = Coder.create(
-        io=io,
-        from_coder=old_coder,
-        **CODER_CREATE_KWARGS,
-        **switch_kwargs,
-    )
-    return _finalize_coder(coder, io, cwd, from_coder=old_coder)
+    kwargs = dict(io=io, from_coder=old_coder, **CODER_CREATE_KWARGS)
+    kwargs.update(switch_kwargs)
+    # SwitchCoder meta flag, not a Coder.create argument (see aider/main.py).
+    kwargs.pop("show_announcements", None)
+    from_coder = kwargs.get("from_coder")
+    coder = Coder.create(**kwargs)
+    return _finalize_coder(coder, io, cwd, from_coder=from_coder)

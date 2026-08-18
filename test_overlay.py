@@ -155,12 +155,122 @@ class MessageFilterTests(unittest.TestCase):
         io.tool_output("Tokens: 5.4k sent, 38 received. Cost: $0.01 message, $0.01 session.")
         io.tool_output("Applied edit to hello.py")
         io.tool_output("Something the model is thinking")
-        texts = [
-            getattr(getattr(u, "content", None), "text", "") for u in conn.updates
+        io.tool_output("Added utils.py to the chat")
+        kinds_and_texts = [
+            (
+                getattr(u, "session_update", None) or getattr(u, "sessionUpdate", None),
+                getattr(getattr(u, "content", None), "text", ""),
+            )
+            for u in conn.updates
         ]
-        self.assertTrue(any("thinking" in t for t in texts))
-        self.assertFalse(any(t.startswith("Tokens:") for t in texts))
-        self.assertFalse(any("Applied edit" in t for t in texts))
+        self.assertTrue(any("thinking" in t for _k, t in kinds_and_texts))
+        self.assertFalse(any(t.startswith("Tokens:") for _k, t in kinds_and_texts))
+        self.assertFalse(any("Applied edit" in t for _k, t in kinds_and_texts))
+        added = [
+            (kind, text)
+            for kind, text in kinds_and_texts
+            if "Added utils.py to the chat" in text
+        ]
+        self.assertEqual(len(added), 1)
+        self.assertEqual(added[0][0], "agent_message_chunk")
+
+    def _message_chunks(self, conn):
+        chunks = []
+        for u in conn.updates:
+            kind = getattr(u, "session_update", None) or getattr(
+                u, "sessionUpdate", None
+            )
+            if kind == "agent_message_chunk":
+                chunks.append(getattr(u.content, "text", ""))
+        return chunks
+
+    def _drain_loop(self, loop):
+        future = asyncio.run_coroutine_threadsafe(asyncio.sleep(0), loop)
+        future.result(timeout=2)
+
+    def _edit_block_only(self):
+        return (
+            "hello.py\n"
+            "<<<<<<< SEARCH\n"
+            'print("Hello, World!")\n'
+            "=======\n"
+            'print("Hallo Peter")\n'
+            ">>>>>>> REPLACE\n"
+        )
+
+    def _fenced_edit_block_only(self):
+        return (
+            "```python\n"
+            "<<<<<<< SEARCH\n"
+            "a\n"
+            "=======\n"
+            "b\n"
+            ">>>>>>> REPLACE\n"
+            "```\n"
+        )
+
+    def test_assistant_output_strips_edit_blocks_keeps_prose(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        loop = asyncio_new_running_loop()
+        self.addCleanup(lambda: stop_loop(loop))
+        conn = FakeConn()
+        io = ACPIO(
+            session_id="s1",
+            connection=conn,
+            loop=loop,
+            root=tmp.name,
+        )
+        message = (
+            "Ich ändere den String.\n"
+            + self._edit_block_only()
+            + "Fertig.\n"
+        )
+        io.assistant_output(message)
+        self._drain_loop(loop)
+        chunks = self._message_chunks(conn)
+        self.assertEqual(len(chunks), 1)
+        self.assertIn("Ich ändere den String.", chunks[0])
+        self.assertIn("Fertig.", chunks[0])
+        self.assertNotIn("<<<<<<< SEARCH", chunks[0])
+
+    def test_assistant_output_edit_only_empty_overlay_sends_fallback(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        loop = asyncio_new_running_loop()
+        self.addCleanup(lambda: stop_loop(loop))
+        conn = FakeConn()
+        io = ACPIO(
+            session_id="s1",
+            connection=conn,
+            loop=loop,
+            root=tmp.name,
+        )
+        message = self._fenced_edit_block_only()
+        io.assistant_output(message)
+        self._drain_loop(loop)
+        chunks = self._message_chunks(conn)
+        self.assertEqual(len(chunks), 1)
+        self.assertIn("<<<<<<< SEARCH", chunks[0])
+
+    def test_assistant_output_edit_only_with_overlay_sends_nothing(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        loop = asyncio_new_running_loop()
+        self.addCleanup(lambda: stop_loop(loop))
+        conn = FakeConn()
+        io = ACPIO(
+            session_id="s1",
+            connection=conn,
+            loop=loop,
+            root=tmp.name,
+        )
+        path = str(safe_abs_path(os.path.join(tmp.name, "hello.py")))
+        Path(path).write_text("orig\n", encoding="utf-8")
+        io.write_text(path, "new\n")
+        io.assistant_output(self._fenced_edit_block_only())
+        self._drain_loop(loop)
+        self.assertEqual(self._message_chunks(conn), [])
 
     def test_send_usage_emits_usage_update(self):
         tmp = tempfile.TemporaryDirectory()
@@ -194,12 +304,11 @@ class WorkspaceSkipTests(unittest.TestCase):
 
         clear_ignore_cache()
 
-    def test_default_settings_skip_logs_and_hidden_files(self):
+    def test_basename_walk_skips_hidden_files_not_logs(self):
         from aider_bridge.workspace_files import iter_workspace_relative_files
 
         with tempfile.TemporaryDirectory() as root:
             Path(root, "hello.py").write_text("print('hi')\n")
-            Path(root, "aider_acp.log").write_text("noise\n")
             Path(root, "notes.log").write_text("noise\n")
             Path(root, ".hidden").write_text("secret\n")
 
@@ -207,7 +316,7 @@ class WorkspaceSkipTests(unittest.TestCase):
                 repo = None
 
             files = iter_workspace_relative_files(root, FakeCoder())
-            self.assertEqual(files, ["hello.py"])
+            self.assertEqual(files, ["hello.py", "notes.log"])
 
     def test_project_gitignore_is_honored_without_git(self):
         from aider_bridge.workspace_files import iter_workspace_relative_files
@@ -223,15 +332,13 @@ class WorkspaceSkipTests(unittest.TestCase):
             files = iter_workspace_relative_files(root, FakeCoder())
             self.assertEqual(files, ["hello.py"])
 
-    def test_project_settings_add_ignore_patterns(self):
+    def test_aiderignore_is_honored(self):
         from aider_bridge.workspace_files import iter_workspace_relative_files
 
         with tempfile.TemporaryDirectory() as root:
             Path(root, "hello.py").write_text("print('hi')\n")
             Path(root, "scratch.tmp").write_text("tmp\n")
-            Path(root, ".aider_acp.toml").write_text(
-                "[workspace]\nignore = [\"*.tmp\"]\n"
-            )
+            Path(root, ".aiderignore").write_text("*.tmp\n")
 
             class FakeCoder:
                 repo = None
@@ -239,28 +346,46 @@ class WorkspaceSkipTests(unittest.TestCase):
             files = iter_workspace_relative_files(root, FakeCoder())
             self.assertEqual(files, ["hello.py"])
 
-    def test_ignore_comes_from_settings_not_hardcoded_suffixes(self):
-        from aider_bridge.ignore import WorkspaceIgnore
-        from aider_bridge.settings import WorkspaceSettings
-        from aider_bridge.workspace_files import iter_workspace_relative_files
+
+class FinalizeCoderTests(unittest.TestCase):
+    def test_finalize_coder_does_not_add_workspace_files(self):
+        from aider_bridge.factory import _finalize_coder
 
         with tempfile.TemporaryDirectory() as root:
             Path(root, "hello.py").write_text("print('hi')\n")
-            Path(root, "notes.log").write_text("keep me\n")
-            Path(root, "scratch.tmp").write_text("skip me\n")
-            settings = WorkspaceSettings(
-                skip_dotfiles=True,
-                honor_gitignore=False,
-                honor_aiderignore=False,
-                ignore=["*.tmp"],
-            )
-            ignore = WorkspaceIgnore.from_settings(settings, root)
 
             class FakeCoder:
-                repo = None
+                def __init__(self):
+                    self.repo = None
+                    self.abs_fnames = set()
+                    self.abs_root_path_cache = {}
+                    self.ignore_mentions = set()
+                    self.add_rel_fname_calls = []
 
-            files = iter_workspace_relative_files(root, FakeCoder(), ignore=ignore)
-            self.assertEqual(files, ["hello.py", "notes.log"])
+                def add_rel_fname(self, rel):
+                    self.add_rel_fname_calls.append(rel)
+                    self.abs_fnames.add(rel)
+
+                def get_inchat_relative_files(self):
+                    return sorted(self.abs_fnames)
+
+                def check_for_file_mentions(self, content):
+                    return None
+
+                def get_file_mentions(self, content):
+                    return []
+
+                def abs_root_path(self, rel_fname):
+                    return str(Path(self.root) / rel_fname)
+
+            coder = FakeCoder()
+            io = type("FakeIO", (), {"root": root})()
+
+            _finalize_coder(coder, io, cwd=root, from_coder=None)
+
+            self.assertEqual(coder.get_inchat_relative_files(), [])
+            self.assertEqual(coder.add_rel_fname_calls, [])
+            self.assertEqual(coder.root, safe_abs_path(root))
 
 
 class FakeConnWithPermission(FakeConn):

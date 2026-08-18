@@ -10,13 +10,19 @@ from aider.commands import SwitchCoder
 from aider.coders import Coder
 from acp.helpers import update_available_commands
 from acp.schema import ClientCapabilities
-from aider_bridge.file_mentions import apply_at_mentions
+from aider_bridge.file_mentions import apply_at_mentions, resolve_command_file_args
 from aider_bridge.io_bridge import ACPIO
 from aider_bridge.factory import create_coder, check_model_keys, switch_coder
 from .available_commands import DENIED_COMMANDS, curated_available_commands
 
 
 REVIEW_MODE_DENIED_COMMANDS = DENIED_COMMANDS
+# Slash commands whose args are file paths; Zed attachments arrive as ACP
+# resource blocks, not text, so we splice resolved paths into the command text.
+FILE_ARG_COMMANDS = frozenset({"add", "drop", "read_only"})
+# Slash commands that still send a prompt to the LLM. @-mentions and ACP
+# resource attachments must be added to chat context before the command runs.
+CHAT_PROMPT_COMMANDS = frozenset({"ask", "code", "architect", "context", "help"})
 
 
 def _normalize_command_name(name: str) -> str:
@@ -49,8 +55,8 @@ def _format_model_announcement(coder: Coder) -> str:
     if editor is not None and getattr(editor, "name", None):
         extras.append(f"editor: {editor.name}")
     if extras:
-        return f"Model: {main}  ({', '.join(extras)})"
-    return f"Model: {main}"
+        return f"Model: {main}  ({', '.join(extras)})\n\n"
+    return f"Model: {main}\n\n"
 
 
 def _fs_flag(capabilities: Optional[ClientCapabilities], name: str) -> bool:
@@ -228,6 +234,16 @@ class AiderSession:
                 self.logger.debug("Coder not initialized, initializing now")
                 await self.initialize_coder()
 
+            if _is_command(prompt_text) and resource_names:
+                cmd_name = _command_name_from_text(prompt_text)
+                if cmd_name in FILE_ARG_COMMANDS:
+                    abs_paths = resolve_command_file_args(
+                        resource_names, self.cwd, self.additional_directories, self.io
+                    )
+                    if abs_paths:
+                        quoted = " ".join(f'"{p}"' for p in abs_paths)
+                        prompt_text = f"{prompt_text.rstrip()} {quoted}".strip()
+
             def _run() -> StopReason:
                 import sys
                 import contextlib
@@ -249,8 +265,10 @@ class AiderSession:
                 )
                 with contextlib.redirect_stdout(sys.stderr):
                     is_command = _is_command(prompt_text)
+                    cmd_name = (
+                        _command_name_from_text(prompt_text) if is_command else None
+                    )
                     if is_command:
-                        cmd_name = _command_name_from_text(prompt_text)
                         if cmd_name in REVIEW_MODE_DENIED_COMMANDS:
                             display = prompt_text.lstrip().split()[0]
                             self.io.tool_error(
@@ -258,7 +276,7 @@ class AiderSession:
                                 "(Git- und host-only Commands wie Clipboard, Editor oder Exit)."
                             )
                             return "end_turn"
-                    else:
+                    if (not is_command) or cmd_name in CHAT_PROMPT_COMMANDS:
                         apply_at_mentions(
                             self.coder,
                             prompt_text,
@@ -274,7 +292,8 @@ class AiderSession:
                             self.io, self.coder, self.cwd, **switch.kwargs
                         )
                         self.current_model_id = self.coder.main_model.name
-                        self._announce_active_model()
+                        if switch.kwargs.get("show_announcements") is not False:
+                            self._announce_active_model()
                         return "end_turn"
                     self.logger.debug("Coder run completed")
                     if self.cancelled.is_set():
