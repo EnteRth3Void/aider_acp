@@ -45,7 +45,7 @@ def _finalize_coder(
     coder.root = root
     coder.abs_root_path_cache.clear()
 
-    logger.info(
+    logger.debug(
         "[paths] create_coder done coder.root=%s io.root=%s getcwd=%s coder.repo=%s inchat_files=%s",
         coder.root,
         io.root,
@@ -68,7 +68,7 @@ def create_coder(
     # (initial init or model switch), not on every prompt.
     sanity_check_model(io, model)
 
-    logger.info(
+    logger.debug(
         "[paths] create_coder start cwd=%r io.root=%r getcwd=%s from_coder=%s",
         cwd,
         io.root,

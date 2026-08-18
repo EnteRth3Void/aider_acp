@@ -164,7 +164,7 @@ class RunPromptCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(run_called)
         self.assertTrue(
             any(
-                "deaktiviert" in getattr(u.content, "text", "")
+                "disabled in review mode" in getattr(u.content, "text", "")
                 for u in conn.updates
                 if getattr(u, "session_update", None) == "agent_message_chunk"
             )

@@ -1,2 +1,2 @@
-aider-chat
-agent-client-protocol
+aider-chat==0.86.2
+agent-client-protocol==0.10.1

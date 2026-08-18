@@ -71,18 +71,19 @@ Open: token `usage` on `PromptResponse` is still missing (the UI gets `usage_upd
 
 ### Capabilities not advertised
 
-`initialize` returns only `protocolVersion` and `agentInfo`. No `agentCapabilities`, no `authMethods`.
+~~`initialize` returns only `protocolVersion` and `agentInfo`. No `agentCapabilities`, no `authMethods`.~~
 
-Defaults therefore:
+**Done:** `initialize` advertises `sessionCapabilities.list`, `.close`, and `.additionalDirectories`. Still not advertised:
 
-- `loadSession: false`
-- no image / audio / embedded context
+- `loadSession: false` (no `session/load` handler)
+- no `authMethods`
+- no image / audio / embedded context (`promptCapabilities`)
 - no MCP (`http`/`sse`)
-- empty `sessionCapabilities`
+- no `sessionCapabilities.resume` / `.fork` / modes
 
-`session/list` and `session/close` are implemented; per the spec Zed must not call them until `sessionCapabilities.list` / `.close` are set.
+~~`session/list` and `session/close` are implemented; per the spec Zed must not call them until `sessionCapabilities.list` / `.close` are set.~~ **Done.**
 
-`additionalDirectories` is applied; the capability for it is missing.
+~~`additionalDirectories` is applied; the capability for it is missing.~~ **Done.**
 
 ~~`clientCapabilities` (fs, terminal, …) are received and neither stored nor used.~~ **Partial:** stored; `fs.writeTextFile` / `fs.readTextFile` choose overlay vs. disk. Terminal capability unused.
 

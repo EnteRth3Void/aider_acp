@@ -77,7 +77,7 @@ class ACPIO(InputOutput):
         self._permission_future: Future[Any] | None = None
         super().__init__(pretty=False, **kwargs)
         self._async_cancelled = asyncio.Event()
-        self.logger.info(
+        self.logger.debug(
             "[paths] ACPIO init session_id=%s root=%s write_via_client=%s read_via_client=%s",
             session_id,
             self.root,
@@ -242,7 +242,7 @@ class ACPIO(InputOutput):
         self.logger.debug("AI history output (%d chars)", len(content or ""))
 
     def assistant_output(self, message: str, pretty=None):
-        self.logger.info("Assistant output received: %s", message)
+        self.logger.debug("Assistant output received: %s", message)
         if not message:
             return
         visible = strip_aider_edit_blocks(message)
@@ -265,7 +265,7 @@ class ACPIO(InputOutput):
             text = f"```\n$ {command}\n{output}\n```"
         else:
             text = f"```\n{output}\n```"
-        self.logger.info("Command output (%d chars): %s", len(output), output[:200])
+        self.logger.debug("Command output (%d chars): %s", len(output), output[:200])
         chunk = AgentMessageChunk(
             content=TextContentBlock(text=text, type="text"),
             session_update="agent_message_chunk",
@@ -279,9 +279,9 @@ class ACPIO(InputOutput):
         if not content:
             return
         if _TOKENS_RE.match(content) or _APPLIED_EDIT_RE.match(content):
-            self.logger.info("Suppressed tool output: %s", content)
+            self.logger.debug("Suppressed tool output: %s", content)
             return
-        self.logger.info("Tool output received: %s", messages)
+        self.logger.debug("Tool output received: %s", messages)
         if _CHAT_STATUS_RE.match(content):
             self.announce(content)
             return

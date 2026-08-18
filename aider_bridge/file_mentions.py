@@ -87,7 +87,7 @@ def find_file_by_basename(
             chosen,
         )
     else:
-        logger.info("[paths] find_file_by_basename name=%r -> %s", name, chosen)
+        logger.debug("[paths] find_file_by_basename name=%r -> %s", name, chosen)
     return chosen, matches
 
 
@@ -104,7 +104,7 @@ def resolve_to_abs_path(
     candidate = Path(path_ref)
     if candidate.is_absolute() and candidate.is_file():
         abs_path = str(safe_abs_path(candidate))
-        logger.info(
+        logger.debug(
             "[paths] resolve_to_abs_path absolute hit path_ref=%r -> %s",
             path_ref,
             abs_path,
@@ -112,7 +112,7 @@ def resolve_to_abs_path(
         return abs_path, []
 
     search_roots = [Path(cwd)] + [Path(d) for d in (additional_directories or [])]
-    logger.info(
+    logger.debug(
         "[paths] resolve_to_abs_path path_ref=%r cwd=%s search_roots=%s",
         path_ref,
         cwd,
@@ -122,7 +122,7 @@ def resolve_to_abs_path(
         resolved = root / path_ref
         if resolved.is_file():
             abs_path = str(safe_abs_path(resolved))
-            logger.info(
+            logger.debug(
                 "[paths] resolve_to_abs_path hit root=%s -> %s",
                 root,
                 abs_path,
@@ -134,7 +134,7 @@ def resolve_to_abs_path(
         if found:
             return found, matches
 
-    logger.info("[paths] resolve_to_abs_path miss path_ref=%r cwd=%s", path_ref, cwd)
+    logger.debug("[paths] resolve_to_abs_path miss path_ref=%r cwd=%s", path_ref, cwd)
     return None, []
 
 
@@ -237,7 +237,7 @@ def apply_at_mentions(
     if not mentions:
         return []
 
-    logger.info(
+    logger.debug(
         "[paths] apply_at_mentions cwd=%s coder.root=%s mentions=%r additional_directories=%r",
         cwd,
         coder.root,

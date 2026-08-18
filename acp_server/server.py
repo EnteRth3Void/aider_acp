@@ -11,21 +11,20 @@ from acp.schema import (
     AgentCapabilities,
     AudioContentBlock,
     ClientCapabilities,
-    CloseSessionRequest,
     CloseSessionResponse,
     EmbeddedResourceContentBlock,
     ImageContentBlock,
     Implementation,
-    InitializeRequest,
     InitializeResponse,
-    ListSessionsRequest,
     ListSessionsResponse,
-    NewSessionRequest,
     NewSessionResponse,
-    PromptRequest,
     PromptResponse,
     ResourceContentBlock,
+    SessionAdditionalDirectoriesCapabilities,
+    SessionCapabilities,
+    SessionCloseCapabilities,
     SessionInfo,
+    SessionListCapabilities,
     SetSessionModelResponse,
     TextContentBlock,
 )
@@ -39,15 +38,6 @@ from .model_catalog import (
 from .session import AiderSession
 
 COMMANDS_ADVERTISE_DELAY = 0.3
-
-# Logger erstellen
-logger = logging.getLogger("AiderAgent")
-logger.setLevel(logging.INFO)
-
-# Console Handler hinzufügen
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
-logger.addHandler(console_handler)
 
 
 class AiderAgent(Agent):
@@ -81,7 +71,16 @@ class AiderAgent(Agent):
             agent_info=Implementation(
                 name="aider-acp", version="0.1.0", title="Aider ACP Server"
             ),
+            agent_capabilities=AgentCapabilities(
+                load_session=False,
+                session_capabilities=SessionCapabilities(
+                    list=SessionListCapabilities(),
+                    close=SessionCloseCapabilities(),
+                    additional_directories=SessionAdditionalDirectoriesCapabilities(),
+                ),
+            ),
         )
+
     async def new_session(
         self,
         cwd: str,
@@ -89,7 +88,7 @@ class AiderAgent(Agent):
         mcp_servers: Optional[List[Any]] = None,
         **kwargs: Any,
     ) -> NewSessionResponse:
-        self.logger.info(
+        self.logger.debug(
             "[paths] session/new cwd=%r additional_directories=%r",
             cwd,
             additional_directories,
@@ -116,7 +115,8 @@ class AiderAgent(Agent):
             current_model_id=current_model_id,
         )
         self.sessions[session_id] = session
-        self.logger.info(
+        self.logger.info("Created session %s", session_id)
+        self.logger.debug(
             "[paths] session/new created session_id=%s session.cwd=%s io.root=%s models=%s",
             session_id,
             session.cwd,
@@ -159,7 +159,7 @@ class AiderAgent(Agent):
             raise ValueError(f"Session {session_id} not found")
 
         coder_root = session.coder.root if session.coder else None
-        self.logger.info(
+        self.logger.debug(
             "[paths] session/prompt session_id=%s session.cwd=%s io.root=%s coder.root=%s getcwd=%s",
             session_id,
             session.cwd,

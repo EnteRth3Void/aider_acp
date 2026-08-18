@@ -1,5 +1,7 @@
 # Aider ACP
 
+**Preview** — not production-ready; API and behavior may change.
+
 Adapter that runs [Aider](https://aider.chat) as an External Agent in [Zed](https://zed.dev) over the [Agent Client Protocol](https://agentclientprotocol.com) (JSON-RPC on stdin/stdout).
 
 Aider is a CLI pair-programming agent: you put files in context, it proposes edits, you iterate. This adapter keeps that loop, but hosts it in Zed's Agent Panel instead of a terminal.
@@ -20,13 +22,17 @@ This is the **review** variant. Aider does not auto-commit. A later git variant 
 
 **Slash commands.** After `session/new` (and again on the first prompt) Zed gets `available_commands_update`, so the `/` menu lists Aider commands that work without git. Git-only commands (`/commit`, `/diff`, `/undo`, `/git`, `/lint`) and host-only ones (clipboard, `$EDITOR`, `/voice`, `/quit`) are omitted and rejected if typed. `/run` stdout lands in the thread.
 
-**Stop and permissions.** The Agent Panel stop button maps to `session/cancel` (drops the overlay, unblocks `confirm_ask`). Aider yes/no questions go through Zed's permission UI (`allow once` / `reject once`).
+**Stop and permissions.** The Agent Panel stop button maps to `session/cancel` (drops the overlay, unblocks `confirm_ask`). Aider yes/no questions go through Zed's permission UI (`allow once` / `reject once`). Session list, close, and extra directories are advertised in `initialize` so Zed can call those handlers.
 
 If the client does not advertise `fs.writeTextFile`, the overlay flushes to disk instead of the review buffer.
 
+## Limitations
+
+Zed's model picker does not render for this agent ([zed#59197](https://github.com/zed-industries/zed/issues/59197)). There is no thread import, no auth UI, and no git mode. Parallel Zed threads are risky because each session uses `os.chdir`.
+
 ## Setup
 
-Python 3.12 and API keys for the LLM providers you want to use.
+Python 3.12+ (see [`.python-version`](.python-version)) and API keys for the LLM providers you want to use.
 
 ```bash
 python -m venv .venv
@@ -56,9 +62,13 @@ In Zed: Agent Settings → External Agents → Add Custom Agent, or in `settings
 
 Open the agent thread in the **project you want to edit**, not in this adapter repo. Restart the agent in Zed after changing adapter code.
 
-Logs live next to the adapter (`aider_acp.log`), not in the user project. ACP traffic: command palette → `dev: open acp logs`.
-
 Zed intercepts messages that start with `/` until it has the command list. If you still see `Available commands: none`, put a space before the slash so Zed treats it as a normal prompt, for example ` /model gpt-4.1`.
+
+## Logging
+
+Default is `warning`: `aider_acp.log` (next to the adapter, not the project) has no chat prompts or assistant replies. stdout stays reserved for ACP JSON-RPC.
+
+For bug reports, set `AIDER_ACP_LOG_LEVEL=debug` in the agent env, restart the agent, and attach `aider_acp.log`. That complements Zed's `dev: open acp logs` (wire protocol vs adapter internals). `off` disables file and stderr logging. Invalid values fall back to `warning`.
 
 ## @ mentions
 
@@ -67,10 +77,11 @@ Chat context stays empty until you `@` or `/add` a file. An explicit path is add
 ## Tests
 
 ```bash
-.venv/bin/python -m unittest test_overlay.py test_models.py test_commands.py -v
+.venv/bin/python -m unittest test_overlay.py test_models.py test_commands.py test_initialize.py test_logging.py -v
 ```
 
-## Internal notes
+## License
 
-- [`zed-acp-planned.md`](zed-acp-planned.md) — missing and planned work
-- [`zed-acp-git-und-v2.md`](zed-acp-git-und-v2.md) — design notes for git mode and ACP v2
+Apache-2.0. This is a **preview**; API and behavior may change.
+
+Design notes (not a public roadmap): [`zed-acp-planned.md`](zed-acp-planned.md), [`zed-acp-git-und-v2.md`](zed-acp-git-und-v2.md).

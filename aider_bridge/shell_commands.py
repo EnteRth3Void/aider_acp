@@ -27,7 +27,7 @@ def patch_run_cmd(io: "ACPIO") -> None:
     def run_cmd_subprocess(command, verbose=False, cwd=None, encoding=None):
         import sys
 
-        logger.info("[paths] shell command=%r cwd=%s io.root=%s", command, cwd, io.root)
+        logger.debug("[paths] shell command=%r cwd=%s io.root=%s", command, cwd, io.root)
         if encoding is None:
             encoding = sys.stdout.encoding
         exit_status, output = original_subprocess(
@@ -39,7 +39,7 @@ def patch_run_cmd(io: "ACPIO") -> None:
 
     @functools.wraps(original_pexpect)
     def run_cmd_pexpect(command, verbose=False, cwd=None):
-        logger.info("[paths] shell (pexpect) command=%r cwd=%s io.root=%s", command, cwd, io.root)
+        logger.debug("[paths] shell (pexpect) command=%r cwd=%s io.root=%s", command, cwd, io.root)
         exit_status, output = original_pexpect(command, verbose=verbose, cwd=cwd)
         if output and output.strip():
             io.command_output(output, command=command)

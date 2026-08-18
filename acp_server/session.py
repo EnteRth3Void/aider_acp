@@ -110,7 +110,7 @@ class AiderSession:
         self.executor = ThreadPoolExecutor(max_workers=1)
         self._prompt_running = False
         self.commands_advertised = False
-        self.logger.info(
+        self.logger.debug(
             "[paths] session init session_id=%s cwd=%s io.root=%s additional_directories=%r",
             session_id,
             self.cwd,
@@ -129,14 +129,14 @@ class AiderSession:
             import sys
             import contextlib
 
-            self.logger.info(
+            self.logger.debug(
                 "[paths] initialize_coder before chdir session_id=%s session.cwd=%s getcwd=%s",
                 self.session_id,
                 self.cwd,
                 os.getcwd(),
             )
             os.chdir(self.cwd)
-            self.logger.info(
+            self.logger.debug(
                 "[paths] initialize_coder after chdir session_id=%s getcwd=%s io.root=%s",
                 self.session_id,
                 os.getcwd(),
@@ -144,7 +144,7 @@ class AiderSession:
             )
             with contextlib.redirect_stdout(sys.stderr):
                 self.coder = create_coder(self.io, model_name=model_name, cwd=self.cwd)
-            self.logger.info(
+            self.logger.debug(
                 "[paths] initialize_coder done session_id=%s coder.root=%s coder.repo=%s",
                 self.session_id,
                 self.coder.root,
@@ -222,7 +222,7 @@ class AiderSession:
         self._prompt_running = True
         self._reset_cancel_state()
         try:
-            self.logger.info("Running prompt with text: %s", prompt_text)
+            self.logger.debug("Running prompt with text: %s", prompt_text)
             self.logger.debug("Resource names: %s", resource_names)
 
             await self.advertise_commands()
@@ -248,7 +248,7 @@ class AiderSession:
                 import sys
                 import contextlib
 
-                self.logger.info(
+                self.logger.debug(
                     "[paths] run_prompt before chdir session_id=%s session.cwd=%s coder.root=%s getcwd=%s",
                     self.session_id,
                     self.cwd,
@@ -256,7 +256,7 @@ class AiderSession:
                     os.getcwd(),
                 )
                 os.chdir(self.cwd)
-                self.logger.info(
+                self.logger.debug(
                     "[paths] run_prompt after chdir session_id=%s getcwd=%s io.root=%s coder.root=%s",
                     self.session_id,
                     os.getcwd(),
@@ -272,8 +272,8 @@ class AiderSession:
                         if cmd_name in REVIEW_MODE_DENIED_COMMANDS:
                             display = prompt_text.lstrip().split()[0]
                             self.io.tool_error(
-                                f"{display} ist im Review-Modus deaktiviert "
-                                "(Git- und host-only Commands wie Clipboard, Editor oder Exit)."
+                                f"{display} is disabled in review mode "
+                                "(git and host-only commands such as clipboard, editor, or exit)."
                             )
                             return "end_turn"
                     if (not is_command) or cmd_name in CHAT_PROMPT_COMMANDS:
