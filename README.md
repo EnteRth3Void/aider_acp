@@ -77,7 +77,7 @@ Chat context stays empty until you `@` or `/add` a file. An explicit path is add
 ## Tests
 
 ```bash
-.venv/bin/python -m unittest test_overlay.py test_models.py test_commands.py test_initialize.py test_logging.py -v
+.venv/bin/python -m unittest discover -s tests -v
 ```
 
 ## License

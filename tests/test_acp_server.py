@@ -2,14 +2,19 @@ import asyncio
 import json
 import subprocess
 import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
 
 async def test_server():
     # Start the server as a subprocess
     process = await asyncio.create_subprocess_exec(
-        ".venv/bin/python", "main.py",
+        str(ROOT / ".venv/bin/python"),
+        str(ROOT / "main.py"),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
+        stderr=asyncio.subprocess.PIPE,
+        cwd=str(ROOT),
     )
 
     pending_requests = {}

@@ -138,9 +138,9 @@ Also noisy today:
 
 ### Tests
 
-`test_acp_server.py` is a manual subprocess run, not unittest. Permissions are always approved.
+`tests/test_acp_server.py` is a manual subprocess run, not unittest. Permissions are always approved.
 
-**Done in `test_overlay.py` / `test_commands.py` / `test_models.py`:** overlay flush + diff `tool_call`, `fs/read_text_file`, cancel before flush, `confirm_ask` on cancel, blocking prompt, `usage_update`, slash commands, model catalog.
+**Done in `tests/` (`test_overlay`, `test_commands`, `test_models`, `test_initialize`, `test_logging`):** overlay flush + diff `tool_call`, `fs/read_text_file`, cancel before flush, `confirm_ask` on cancel, blocking prompt, `usage_update`, slash commands, model catalog, initialize caps, log levels.
 
 Open: load, modes, `PromptResponse.usage`.
 
