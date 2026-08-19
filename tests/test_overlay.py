@@ -357,6 +357,11 @@ class FinalizeCoderTests(unittest.TestCase):
             class FakeCoder:
                 def __init__(self):
                     self.repo = None
+                    self.main_model = type(
+                        "FakeModel",
+                        (),
+                        {"commit_message_models": lambda self: []},
+                    )()
                     self.abs_fnames = set()
                     self.abs_root_path_cache = {}
                     self.ignore_mentions = set()

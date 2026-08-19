@@ -8,12 +8,18 @@ from typing import Literal, Optional, Any
 StopReason = Literal["end_turn", "cancelled"]
 from aider.commands import SwitchCoder
 from aider.coders import Coder
-from acp.helpers import update_available_commands
+from acp.helpers import update_available_commands, update_current_mode
 from acp.schema import ClientCapabilities
 from aider_bridge.file_mentions import apply_at_mentions, resolve_command_file_args
 from aider_bridge.io_bridge import ACPIO
 from aider_bridge.factory import create_coder, check_model_keys, switch_coder
 from .available_commands import DENIED_COMMANDS, curated_available_commands
+from .session_modes import (
+    SESSION_MODES,
+    VALID_MODE_IDS,
+    aider_edit_format,
+    infer_mode_id,
+)
 
 
 REVIEW_MODE_DENIED_COMMANDS = DENIED_COMMANDS
@@ -43,6 +49,13 @@ def _command_name_from_text(text: str) -> str | None:
         first_word = stripped.split()[0]
         return _normalize_command_name(first_word[1:])
     return None
+
+
+def _format_mode_announcement(mode_id: str) -> str:
+    for mode in SESSION_MODES:
+        if mode.id == mode_id:
+            return f"Mode: {mode.name}\n\n"
+    return f"Mode: {mode_id}\n\n"
 
 
 def _format_model_announcement(coder: Coder) -> str:
@@ -107,6 +120,7 @@ class AiderSession:
         self.coder: Optional[Coder] = None
         self.available_model_ids = list(available_model_ids or [])
         self.current_model_id = current_model_id
+        self.current_mode_id = "code"
         self.executor = ThreadPoolExecutor(max_workers=1)
         self._prompt_running = False
         self.commands_advertised = False
@@ -130,20 +144,18 @@ class AiderSession:
             import contextlib
 
             self.logger.debug(
-                "[paths] initialize_coder before chdir session_id=%s session.cwd=%s getcwd=%s",
+                "[paths] initialize_coder session_id=%s session.cwd=%s getcwd=%s",
                 self.session_id,
                 self.cwd,
                 os.getcwd(),
             )
-            os.chdir(self.cwd)
-            self.logger.debug(
-                "[paths] initialize_coder after chdir session_id=%s getcwd=%s io.root=%s",
-                self.session_id,
-                os.getcwd(),
-                self.io.root,
-            )
             with contextlib.redirect_stdout(sys.stderr):
-                self.coder = create_coder(self.io, model_name=model_name, cwd=self.cwd)
+                self.coder = create_coder(
+                    self.io,
+                    model_name=model_name,
+                    cwd=self.cwd,
+                    edit_format=aider_edit_format(self.current_mode_id, model_name),
+                )
             self.logger.debug(
                 "[paths] initialize_coder done session_id=%s coder.root=%s coder.repo=%s",
                 self.session_id,
@@ -158,6 +170,24 @@ class AiderSession:
         if not self.coder:
             return
         self.io.announce(_format_model_announcement(self.coder))
+
+    def _announce_active_mode(self) -> None:
+        self.io.announce(_format_mode_announcement(self.current_mode_id))
+
+    def _send_mode_update(self, mode_id: str) -> None:
+        if self.connection is None:
+            return
+        update = update_current_mode(mode_id)
+        coro = self.connection.session_update(
+            session_id=self.session_id, update=update
+        )
+        try:
+            if asyncio.get_running_loop() is self.loop:
+                self.loop.create_task(coro)
+                return
+        except RuntimeError:
+            pass
+        asyncio.run_coroutine_threadsafe(coro, self.loop)
 
     async def advertise_commands(self) -> None:
         """Tell Zed which slash commands exist. Safe to call more than once."""
@@ -188,7 +218,6 @@ class AiderSession:
             import sys
             import contextlib
 
-            os.chdir(self.cwd)
             with contextlib.redirect_stdout(sys.stderr):
                 self.coder = create_coder(
                     self.io,
@@ -198,6 +227,38 @@ class AiderSession:
                 )
 
         await self.loop.run_in_executor(self.executor, _switch)
+
+    async def set_mode(self, mode_id: str) -> None:
+        if self._prompt_running:
+            raise RuntimeError("Cannot change mode while a prompt is running")
+        if mode_id not in VALID_MODE_IDS:
+            raise ValueError(f"Unknown mode: {mode_id}")
+
+        self.current_mode_id = mode_id
+        if self.coder:
+
+            def _switch():
+                import sys
+                import contextlib
+
+                with contextlib.redirect_stdout(sys.stderr):
+                    self.coder = switch_coder(
+                        self.io,
+                        self.coder,
+                        self.cwd,
+                        edit_format=aider_edit_format(
+                            mode_id, self.current_model_id
+                        ),
+                    )
+
+            await self.loop.run_in_executor(self.executor, _switch)
+
+        if self.connection is not None:
+            await self.connection.session_update(
+                session_id=self.session_id,
+                update=update_current_mode(mode_id),
+            )
+        self._announce_active_mode()
 
 
     @property
@@ -249,19 +310,11 @@ class AiderSession:
                 import contextlib
 
                 self.logger.debug(
-                    "[paths] run_prompt before chdir session_id=%s session.cwd=%s coder.root=%s getcwd=%s",
+                    "[paths] run_prompt session_id=%s session.cwd=%s coder.root=%s getcwd=%s",
                     self.session_id,
                     self.cwd,
                     self.coder.root if self.coder else None,
                     os.getcwd(),
-                )
-                os.chdir(self.cwd)
-                self.logger.debug(
-                    "[paths] run_prompt after chdir session_id=%s getcwd=%s io.root=%s coder.root=%s",
-                    self.session_id,
-                    os.getcwd(),
-                    self.io.root,
-                    self.coder.root if self.coder else None,
                 )
                 with contextlib.redirect_stdout(sys.stderr):
                     is_command = _is_command(prompt_text)
@@ -292,8 +345,17 @@ class AiderSession:
                             self.io, self.coder, self.cwd, **switch.kwargs
                         )
                         self.current_model_id = self.coder.main_model.name
-                        if switch.kwargs.get("show_announcements") is not False:
+                        show_announcements = (
+                            switch.kwargs.get("show_announcements") is not False
+                        )
+                        if show_announcements:
                             self._announce_active_model()
+                        inferred = infer_mode_id(self.coder)
+                        if inferred is not None and inferred != self.current_mode_id:
+                            self.current_mode_id = inferred
+                            self._send_mode_update(inferred)
+                            if show_announcements:
+                                self._announce_active_mode()
                         return "end_turn"
                     self.logger.debug("Coder run completed")
                     if self.cancelled.is_set():

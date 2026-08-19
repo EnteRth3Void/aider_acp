@@ -17,7 +17,7 @@ Agent methods with no handler. Zed cannot use them.
 | ~~`session/cancel`~~ | ~~Stop button. Without a handler Aider keeps running.~~ **Done:** `cancel` sets a session event, aborts `confirm_ask`, skips the overlay flush. |
 | `session/load` | Thread history and “Import Threads”. Only if `loadSession: true`. |
 | `authenticate` | Login in the Agent Panel. Keys currently come from env only. |
-| `session/set_mode` | Mode picker (Ask / Code / Architect, etc.). |
+| ~~`session/set_mode`~~ | ~~Mode picker (Ask / Code / Architect, etc.).~~ **Done:** Ask / Code / Architect via `modes` on `session/new` and `session/set_mode`. Default is code. Review/git modes are not part of this slice. |
 | ~~`session/set_model`~~ | ~~Model choice hardcoded to `gpt-4o`.~~ **Done:** list from `AIDER_ACP_MODELS` in `agent_servers.env`; default = first list entry; switch via `set_session_model`. Zed does not render the picker ([zed#59197](https://github.com/zed-industries/zed/issues/59197)) — workaround `/model`. |
 | `session/set_config_option` | Session options in the Zed UI. |
 
@@ -40,7 +40,7 @@ Zed renders these types in the Agent Panel; the adapter does not emit all of the
 
 - ~~`tool_call` with `content` of type `diff` — reviewable file edits~~ **Done:** on overlay flush, `start_tool_call(kind="edit")` + `tool_diff_content`, then `fs/write_text_file`.
 - ~~`available_commands_update` — slash commands (`/add`, `/commit`, …)~~ **Done:** curated set after `session/new` (no git/host-only commands; `/run` is included).
-- `current_mode_update`
+- ~~`current_mode_update`~~ **Done:** Ask / Code / Architect picker sync (`current_mode_update`). Review/git modes remain open ([`zed-acp-git-und-v2.md`](zed-acp-git-und-v2.md)).
 - `config_option_update`
 - `plan` / `agent_plan`
 - ~~`usage_update` — token usage~~ **Done:** after each prompt (sent vs. context window + session cost). Not in `PromptResponse.usage`.
@@ -79,7 +79,7 @@ Open: token `usage` on `PromptResponse` is still missing (the UI gets `usage_upd
 - no `authMethods`
 - no image / audio / embedded context (`promptCapabilities`)
 - no MCP (`http`/`sse`)
-- no `sessionCapabilities.resume` / `.fork` / modes
+- no `sessionCapabilities.resume` / `.fork`
 
 ~~`session/list` and `session/close` are implemented; per the spec Zed must not call them until `sessionCapabilities.list` / `.close` are set.~~ **Done.**
 
@@ -91,7 +91,7 @@ Open: token `usage` on `PromptResponse` is still missing (the UI gets `usage_upd
 
 The response is only `sessionId`. Missing:
 
-- `modes` — no mode picker
+- ~~`modes` — Ask / Code / Architect mode picker~~ **Done:** `modes` with `availableModes` + `currentModeId` (default `code`). Review/git modes not included.
 - ~~`models` — no model choice~~ **Done:** `models` with `availableModels` + `currentModelId` from `AIDER_ACP_MODELS` (default = first entry; entries without an API key are dropped). Zed does not render the picker.
 - `configOptions`
 
@@ -115,7 +115,7 @@ Only Aider `confirm_ask` goes through `session/request_permission`. File writes 
 - ~~`close_session` shuts the executor with `wait=False` without cancelling the in-flight prompt.~~ **Partial:** `close_session` now signals cancel before executor shutdown; LLM HTTP may still run.
 - `list_sessions` ignores `cwd`, `cursor`, `additional_directories`. No pagination, no `updatedAt`.
 - Sessions live in process memory. After restart the ID is gone — `session/load` is missing anyway.
-- Global `os.chdir` in the session: risky with several parallel Zed threads.
+- ~~Global `os.chdir` in the session: risky with several parallel Zed threads.~~ **Done:** sessions bind coder/git to `session.cwd` without changing process cwd.
 
 ### Coder / workspace
 
@@ -140,9 +140,9 @@ Also noisy today:
 
 `tests/test_acp_server.py` is a manual subprocess run, not unittest. Permissions are always approved.
 
-**Done in `tests/` (`test_overlay`, `test_commands`, `test_models`, `test_initialize`, `test_logging`):** overlay flush + diff `tool_call`, `fs/read_text_file`, cancel before flush, `confirm_ask` on cancel, blocking prompt, `usage_update`, slash commands, model catalog, initialize caps, log levels.
+**Done in `tests/` (`test_overlay`, `test_commands`, `test_models`, `test_modes`, `test_initialize`, `test_logging`):** overlay flush + diff `tool_call`, `fs/read_text_file`, cancel before flush, `confirm_ask` on cancel, blocking prompt, `usage_update`, slash commands, model catalog, session modes, initialize caps, log levels.
 
-Open: load, modes, `PromptResponse.usage`.
+Open: load, `PromptResponse.usage`.
 
 ---
 
@@ -161,9 +161,9 @@ Things that exist (protocol, SDK, or our code) but are not wired up.
 
 ### SDK helpers not called
 
-`acp.helpers`: `start_edit_tool_call`, `start_read_tool_call`, `tool_terminal_ref`, `update_plan`, `update_current_mode`, image/audio/resource blocks.
+`acp.helpers`: `start_edit_tool_call`, `start_read_tool_call`, `tool_terminal_ref`, `update_plan`, image/audio/resource blocks.
 
-In use: `start_tool_call`, `update_tool_call`, `tool_diff_content`, `update_available_commands`.
+In use: `start_tool_call`, `update_tool_call`, `tool_diff_content`, `update_available_commands`, `update_current_mode`.
 
 ### Received but unused parameters
 

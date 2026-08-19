@@ -18,6 +18,8 @@ This is the **review** variant. Aider does not auto-commit. A later git variant 
 
 **Models.** The list comes from `AIDER_ACP_MODELS` (comma-separated LiteLLM/Aider IDs). Entries without a matching API key are dropped from the list. There is no implicit default — without that env var the agent cannot start a session. On `session/new` the first model in `AIDER_ACP_MODELS` is selected. The ACP model picker is implemented (`models` in the session response, `session/set_model`), but Zed currently does not render it for this agent ([zed#59197](https://github.com/zed-industries/zed/issues/59197)). Switch with `/model`, `/weak-model`, or `/editor-model`. After init or a switch, the thread posts a line like `Model: gpt-4o  (weak: gpt-4o-mini, editor: gpt-4o)`.
 
+**Modes.** Zed gets the Ask / Code / Architect picker via ACP session modes (`modes` on `session/new`, `session/set_mode`). Default is **code**, like the Aider CLI. Slash `/ask`, `/code`, `/architect`, and `/chat-mode` still work. Persistent switches (picker or slash without a prompt) keep the picker in sync. One-shot `/ask hello` does not change the picker.
+
 **Empty context.** A thread starts with no files. `@path` (basename search walks the project) and Zed file attachments add the file to the chat automatically — same as `/add`. `/read-only` adds without allowing edits. Without files, Aider may still reply in chat instead of finishing silently.
 
 **Slash commands.** After `session/new` (and again on the first prompt) Zed gets `available_commands_update`, so the `/` menu lists Aider commands that work without git. Git-only commands (`/commit`, `/diff`, `/undo`, `/git`, `/lint`) and host-only ones (clipboard, `$EDITOR`, `/voice`, `/quit`) are omitted and rejected if typed. `/run` stdout lands in the thread.
@@ -28,7 +30,7 @@ If the client does not advertise `fs.writeTextFile`, the overlay flushes to disk
 
 ## Limitations
 
-Zed's model picker does not render for this agent ([zed#59197](https://github.com/zed-industries/zed/issues/59197)). There is no thread import, no auth UI, and no git mode. Parallel Zed threads are risky because each session uses `os.chdir`.
+Zed's model picker does not render for this agent ([zed#59197](https://github.com/zed-industries/zed/issues/59197)). There is no thread import, no auth UI, and no git mode. Sessions keep the process working directory unchanged, so parallel Zed threads do not clobber each other's cwd.
 
 ## Setup
 

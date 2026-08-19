@@ -25,6 +25,7 @@ from acp.schema import (
     SessionCloseCapabilities,
     SessionInfo,
     SessionListCapabilities,
+    SetSessionModeResponse,
     SetSessionModelResponse,
     TextContentBlock,
 )
@@ -35,6 +36,7 @@ from .model_catalog import (
     filter_available_models,
     parse_catalog_env,
 )
+from .session_modes import VALID_MODE_IDS, build_session_mode_state
 from .session import AiderSession
 
 COMMANDS_ADVERTISE_DELAY = 0.3
@@ -129,6 +131,7 @@ class AiderAgent(Agent):
         return NewSessionResponse(
             session_id=session_id,
             models=build_session_model_state(available_models, current_model_id),
+            modes=build_session_mode_state("code"),
         )
 
     async def _advertise_commands(self, session_id: str) -> None:
@@ -217,6 +220,20 @@ class AiderAgent(Agent):
 
         await session.set_model(model_id)
         return SetSessionModelResponse()
+
+    async def set_session_mode(
+        self, mode_id: str, session_id: str, **kwargs: Any
+    ) -> SetSessionModeResponse:
+        session = self.sessions.get(session_id)
+        if session is None:
+            raise ValueError(f"Session {session_id} not found")
+        if session.prompt_running:
+            raise ValueError("Cannot change mode while a prompt is running")
+        if mode_id not in VALID_MODE_IDS:
+            raise ValueError(f"Unknown mode: {mode_id}")
+
+        await session.set_mode(mode_id)
+        return SetSessionModeResponse()
 
     async def list_sessions(
         self,

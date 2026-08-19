@@ -3,6 +3,7 @@ import os
 
 from aider.coders import Coder
 from aider.models import Model, sanity_check_model
+from aider.repo import GitRepo
 from aider.utils import safe_abs_path
 
 from .file_mentions import patch_coder_file_mentions
@@ -41,7 +42,17 @@ def _finalize_coder(
 ) -> Coder:
     patch_coder_file_mentions(coder)
 
-    root = safe_abs_path(cwd or io.root or os.getcwd())
+    root = safe_abs_path(cwd or io.root)
+    try:
+        coder.repo = GitRepo(
+            io,
+            [],
+            root,
+            models=coder.main_model.commit_message_models(),
+        )
+    except FileNotFoundError:
+        coder.repo = None
+
     coder.root = root
     coder.abs_root_path_cache.clear()
 
@@ -61,6 +72,7 @@ def create_coder(
     model_name: str,
     cwd: str | None = None,
     from_coder: Coder | None = None,
+    edit_format: str | None = None,
 ) -> Coder:
     patch_run_cmd(io)
     model = Model(model_name)
@@ -76,11 +88,15 @@ def create_coder(
         from_coder is not None,
     )
 
+    extra = {}
+    if edit_format is not None:
+        extra["edit_format"] = edit_format
     coder = Coder.create(
         main_model=model,
         io=io,
         from_coder=from_coder,
         **CODER_CREATE_KWARGS,
+        **extra,
     )
     return _finalize_coder(coder, io, cwd, from_coder)
 

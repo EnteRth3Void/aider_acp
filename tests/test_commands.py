@@ -21,6 +21,9 @@ class FakeModel:
     def __init__(self, name: str):
         self.name = name
 
+    def commit_message_models(self):
+        return []
+
 
 class FakeCoder:
     root = tempfile.gettempdir()
@@ -104,8 +107,6 @@ class RunPromptCommandTests(unittest.IsolatedAsyncioTestCase):
         """Zed attachments arrive as resource_names, not text; /add must still see them."""
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        # run_prompt does a global os.chdir(self.cwd); restore before tmp is removed.
-        self.addCleanup(os.chdir, os.getcwd())
         file_path = Path(tmp.name) / "notes.py"
         file_path.write_text("print('hi')\n", encoding="utf-8")
 
@@ -392,6 +393,8 @@ class SwitchCoderFactoryTests(unittest.TestCase):
         temp = FakeCoder()
         created = FakeCoder()
         created.abs_root_path_cache = {}
+        created.check_for_file_mentions = lambda content: None
+        created.get_file_mentions = lambda content: []
         created.get_inchat_relative_files = lambda: []
 
         class FakeIO:
