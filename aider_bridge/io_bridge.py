@@ -433,6 +433,11 @@ class ACPIO(InputOutput):
         )
         return approved
 
+    def get_input(self, *args, **kwargs):
+        # ACP is not a TTY. Coder.run(with_message="") would otherwise
+        # block here until the process dies; cancel cannot interrupt it.
+        raise EOFError
+
     # Suppress terminal outputs
     def user_input(self, inp: str, log_only: bool = True):
         pass

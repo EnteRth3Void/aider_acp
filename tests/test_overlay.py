@@ -617,6 +617,18 @@ class PromptLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result), 1)
         self.assertFalse(result[0])
 
+    def test_get_input_raises_eof_instead_of_blocking(self):
+        loop = asyncio_new_running_loop()
+        self.addCleanup(lambda: stop_loop(loop))
+        io = ACPIO(
+            session_id="s1",
+            connection=FakeConn(),
+            loop=loop,
+            root=tempfile.gettempdir(),
+        )
+        with self.assertRaises(EOFError):
+            io.get_input("/tmp", [], [], None)
+
 
 def asyncio_new_running_loop():
     import asyncio

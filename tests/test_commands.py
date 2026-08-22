@@ -150,6 +150,57 @@ class RunPromptCommandTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(captured["message"], "/ask hi")
 
+    async def test_mention_only_prompt_skips_coder_run(self):
+        """Zed @-pills without typed text must not enter Aider's get_input loop."""
+        session, _conn = await self._make_session()
+        run_called = False
+
+        def run(with_message=None):
+            nonlocal run_called
+            run_called = True
+
+        with self._validate_ok():
+            with patch("acp_server.session.apply_at_mentions") as apply_mock:
+                with patch.object(session.coder, "run", side_effect=run):
+                    stop_reason = await session.run_prompt(
+                        "", resource_names=["utils.py"]
+                    )
+
+        self.assertEqual(stop_reason, "end_turn")
+        self.assertFalse(run_called)
+        apply_mock.assert_called_once()
+        self.assertEqual(apply_mock.call_args.kwargs["extra_mentions"], ["utils.py"])
+
+    async def test_whitespace_only_prompt_skips_coder_run(self):
+        session, _conn = await self._make_session()
+        run_called = False
+
+        def run(with_message=None):
+            nonlocal run_called
+            run_called = True
+
+        with self._validate_ok():
+            with patch("acp_server.session.apply_at_mentions"):
+                with patch.object(session.coder, "run", side_effect=run):
+                    stop_reason = await session.run_prompt("   \n")
+
+        self.assertEqual(stop_reason, "end_turn")
+        self.assertFalse(run_called)
+
+    async def test_mention_only_prompt_allows_follow_up(self):
+        """Send Now waits for the in-flight prompt; an @-only turn must finish."""
+        session, _conn = await self._make_session()
+        with self._validate_ok():
+            with patch("acp_server.session.apply_at_mentions"):
+                with patch.object(session.coder, "run") as run_mock:
+                    first = await session.run_prompt("", resource_names=["utils.py"])
+                    self.assertFalse(session.prompt_running)
+                    second = await session.run_prompt("what does this do?")
+
+        self.assertEqual(first, "end_turn")
+        self.assertEqual(second, "end_turn")
+        run_mock.assert_called_once_with(with_message="what does this do?")
+
     async def test_denylist_blocks_commit_without_run(self):
         session, conn = await self._make_session()
         run_called = False

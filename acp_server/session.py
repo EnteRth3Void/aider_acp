@@ -337,6 +337,13 @@ class AiderSession:
                             self.additional_directories,
                             extra_mentions=resource_names,
                         )
+                    # Empty ACP prompts (Zed @-pills with no typed text) must
+                    # not call Coder.run(""); that blocks forever in get_input.
+                    if not (prompt_text or "").strip():
+                        if self.cancelled.is_set():
+                            self.io.clear_overlay()
+                            return "cancelled"
+                        return "end_turn"
                     self.logger.debug("Running coder with message: %s", prompt_text)
                     try:
                         self.coder.run(with_message=prompt_text)
