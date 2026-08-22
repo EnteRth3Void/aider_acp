@@ -26,13 +26,35 @@ from aider.io import InputOutput
 from aider.utils import is_image_file, safe_abs_path
 
 # Aider streams SEARCH/REPLACE as assistant text; Zed already gets a proper diff tool_call.
+# Official layout: filename on its own line, then a fenced SEARCH/REPLACE block.
+# Models also put the filename inside the fence, omit the fence, or insert a blank line.
+_PATH_LINE = (
+    r"[ \t]*(?:"
+    r"(?:[\w.-]+[/\\])*[\w.-]+\.[A-Za-z0-9]+"
+    r"|"
+    r"[\w.-]+"
+    r")[ \t]*\r?\n"
+)
 _FENCED_EDIT_RE = re.compile(
-    r"```[^\n]*\n[ \t]*<<<<<<< SEARCH\n.*?>>>>>>> REPLACE[ \t]*\n```[ \t]*\n?",
-    re.DOTALL,
+    r"(?:^" + _PATH_LINE + r")?"
+    r"```+[^\n]*\r?\n"
+    r"(?:" + _PATH_LINE + r")?"
+    r"(?:\r?\n)*"
+    r"[ \t]*<<<<<<< SEARCH[^\n]*\r?\n"
+    r".*?"
+    r"^[ \t]*>>>>>>> REPLACE[^\n]*\r?\n"
+    r"```+[ \t]*(?:\r?\n)?",
+    re.MULTILINE | re.DOTALL,
 )
 _EDIT_BLOCK_RE = re.compile(
-    r"^[ \t]*<<<<<<< SEARCH\n.*?^[ \t]*>>>>>>> REPLACE[ \t]*\n?",
+    r"(?:^" + _PATH_LINE + r")?"
+    r"[ \t]*<<<<<<< SEARCH[^\n]*\r?\n"
+    r".*?"
+    r"^[ \t]*>>>>>>> REPLACE[^\n]*\r?\n?",
     re.MULTILINE | re.DOTALL,
+)
+_FILENAME_ONLY_FENCE_RE = re.compile(
+    r"```+[^\n]*\r?\n" + _PATH_LINE + r"```+[ \t]*(?:\r?\n)?",
 )
 _APPLIED_EDIT_RE = re.compile(
     r"^(Did not apply edit to |Applied edit to )\S+",
@@ -47,11 +69,12 @@ _CHAT_STATUS_RE = re.compile(
 
 
 def strip_aider_edit_blocks(message: str) -> str:
-    """Remove Aider SEARCH/REPLACE blocks; keep surrounding prose."""
+    """Remove Aider SEARCH/REPLACE blocks and their filename lines; keep prose."""
     if not message:
         return message
     text = _FENCED_EDIT_RE.sub("", message)
     text = _EDIT_BLOCK_RE.sub("", text)
+    text = _FILENAME_ONLY_FENCE_RE.sub("", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
@@ -247,9 +270,8 @@ class ACPIO(InputOutput):
             return
         visible = strip_aider_edit_blocks(message)
         if not visible:
-            if self._overlay:
-                return
-            visible = message
+            # Overlay is filled after this call; do not fall back to raw SEARCH/REPLACE.
+            return
         chunk = AgentMessageChunk(
             content=TextContentBlock(text=visible, type="text"),
             session_update="agent_message_chunk",

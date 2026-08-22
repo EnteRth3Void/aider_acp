@@ -123,8 +123,8 @@ class MessageFilterTests(unittest.TestCase):
             "Fertig.\n"
         )
         visible = strip_aider_edit_blocks(message)
-        self.assertIn("Ich ändere den String.", visible)
-        self.assertIn("Fertig.", visible)
+        self.assertEqual(visible, "Ich ändere den String.\nFertig.")
+        self.assertNotIn("hello.py", visible)
         self.assertNotIn("<<<<<<< SEARCH", visible)
         self.assertNotIn("Hello, World!", visible)
 
@@ -139,6 +139,79 @@ class MessageFilterTests(unittest.TestCase):
             "```\n"
         )
         self.assertEqual(strip_aider_edit_blocks(message), "")
+
+    def test_strip_canonical_aider_format_drops_filename(self):
+        message = (
+            "Hier sind die Änderungen:\n\n"
+            "utils.py\n"
+            "```python\n"
+            "<<<<<<< SEARCH\n"
+            "def addiere():\n"
+            "=======\n"
+            "def add():\n"
+            ">>>>>>> REPLACE\n"
+            "```\n\n"
+            "utils.py\n"
+            "```python\n"
+            "<<<<<<< SEARCH\n"
+            "def subtrahiere():\n"
+            "=======\n"
+            "def subtract():\n"
+            ">>>>>>> REPLACE\n"
+            "```\n"
+        )
+        visible = strip_aider_edit_blocks(message)
+        self.assertEqual(visible, "Hier sind die Änderungen:")
+        self.assertNotIn("utils.py", visible)
+        self.assertNotIn("<<<<<<< SEARCH", visible)
+
+    def test_strip_filename_inside_fence(self):
+        message = (
+            "Hier sind die Änderungen:\n\n"
+            "```python\n"
+            "utils.py\n"
+            "<<<<<<< SEARCH\n"
+            "def addiere():\n"
+            "=======\n"
+            "def add():\n"
+            ">>>>>>> REPLACE\n"
+            "```\n"
+        )
+        visible = strip_aider_edit_blocks(message)
+        self.assertEqual(visible, "Hier sind die Änderungen:")
+        self.assertNotIn("utils.py", visible)
+        self.assertNotIn("```", visible)
+
+    def test_strip_blank_line_after_fence(self):
+        message = (
+            "Hier sind die Änderungen:\n\n"
+            "utils.py\n"
+            "```python\n"
+            "\n"
+            "<<<<<<< SEARCH\n"
+            "a\n"
+            "=======\n"
+            "b\n"
+            ">>>>>>> REPLACE\n"
+            "```\n"
+        )
+        visible = strip_aider_edit_blocks(message)
+        self.assertEqual(visible, "Hier sind die Änderungen:")
+        self.assertNotIn("utils.py", visible)
+
+    def test_strip_keeps_filename_mentioned_in_prose(self):
+        message = (
+            "I will update utils.py next.\n"
+            "utils.py\n"
+            "<<<<<<< SEARCH\n"
+            "a\n"
+            "=======\n"
+            "b\n"
+            ">>>>>>> REPLACE\n"
+        )
+        self.assertEqual(
+            strip_aider_edit_blocks(message), "I will update utils.py next."
+        )
 
     def test_tool_output_skips_tokens_and_applied_edit(self):
         tmp = tempfile.TemporaryDirectory()
@@ -233,8 +306,9 @@ class MessageFilterTests(unittest.TestCase):
         self.assertIn("Ich ändere den String.", chunks[0])
         self.assertIn("Fertig.", chunks[0])
         self.assertNotIn("<<<<<<< SEARCH", chunks[0])
+        self.assertNotIn("hello.py", chunks[0])
 
-    def test_assistant_output_edit_only_empty_overlay_sends_fallback(self):
+    def test_assistant_output_edit_only_empty_overlay_sends_nothing(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         loop = asyncio_new_running_loop()
@@ -249,9 +323,7 @@ class MessageFilterTests(unittest.TestCase):
         message = self._fenced_edit_block_only()
         io.assistant_output(message)
         self._drain_loop(loop)
-        chunks = self._message_chunks(conn)
-        self.assertEqual(len(chunks), 1)
-        self.assertIn("<<<<<<< SEARCH", chunks[0])
+        self.assertEqual(self._message_chunks(conn), [])
 
     def test_assistant_output_edit_only_with_overlay_sends_nothing(self):
         tmp = tempfile.TemporaryDirectory()
